@@ -20,8 +20,8 @@ except ImportError:  # anthropic 미설치 환경에서도 서버는 떠야 함
     anthropic = None
     _client = None
 
-# 모델은 환경변수로 교체 가능 (claude-sonnet-5 / claude-haiku-4-5 등)
-MODEL = os.environ.get("FEEDBACK_MODEL", "claude-opus-5")
+# 모델은 환경변수로 교체 가능 (claude-opus-5 / claude-haiku-4-5 등)
+MODEL = os.environ.get("FEEDBACK_MODEL", "claude-sonnet-5")
 
 AXIS_LABELS = {
     "stability": "음성 안정성",
