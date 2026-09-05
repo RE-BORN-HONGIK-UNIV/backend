@@ -36,6 +36,9 @@ from step2.gaze_analyzer import detect_gaze_segments
 from step2.scoring import score_blink_rate, score_gaze_segments
 from step2.set_baseline import calibrate_baseline_ear
 
+# Step1 LLM 코칭 피드백 (선택적 — 키 없으면 자동 폴백)
+from step1_llm_feedback import generate_feedback
+
 try:
     import whisper
     WHISPER_AVAILABLE = True
@@ -516,6 +519,16 @@ def analyze_gaze_blink():
             except:
                 pass
 # ▲▲▲ [추가 끝] ▲▲▲
+
+@app.route('/analyze/feedback', methods=['POST'])
+def analyze_feedback():
+    """Step 1 · LLM 코칭 피드백 — /analyze 결과(JSON)를 받아 한 문단 생성."""
+    result = request.get_json(silent=True)
+    if not result or 'scores' not in result:
+        return jsonify({'error': 'scores가 필요합니다'}), 400
+    text = generate_feedback(result)
+    return jsonify({'feedback': text, 'source': 'llm' if text else 'template'})
+
 
 if __name__ == '__main__':
     load_models()
