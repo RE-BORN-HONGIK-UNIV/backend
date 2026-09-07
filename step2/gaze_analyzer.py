@@ -46,9 +46,12 @@ def estimate_head_pose(landmarks_2d, frame_size, pose_idx):
 
 
 def is_looking_at_camera(yaw, pitch, iris_offset_x, iris_offset_y,
+                          baseline_yaw=0.0, baseline_pitch=0.0,
                           yaw_thresh=15, pitch_thresh=15, iris_thresh=0.15):
-    """머리 방향 + 눈동자 상대위치 둘 다 고려 - 고개는 정면인데 눈만 돌린 경우도 잡음"""
-    return (abs(yaw) < yaw_thresh and abs(pitch) < pitch_thresh
+    """머리 방향 + 눈동자 상대위치 둘 다 고려 - 고개는 정면인데 눈만 돌린 경우도 잡음.
+    baseline_yaw/pitch: set_baseline.calibrate_baseline_gaze()로 잡은 개인별 "정면" 기준값.
+    웹캠이 얼굴 정면이 아닌 위치에 있는 사람의 시선 판정 편향을 보정한다."""
+    return (abs(yaw - baseline_yaw) < yaw_thresh and abs(pitch - baseline_pitch) < pitch_thresh
             and abs(iris_offset_x) < iris_thresh and abs(iris_offset_y) < iris_thresh)
 
 
@@ -66,22 +69,60 @@ def compute_iris_offset(landmarks, left_iris_idx, right_iris_idx, left_eye_idx, 
     return avg[0], avg[1]  # (x_offset, y_offset)
 
 
-def detect_gaze_segments(frames, pose_idx, left_iris_idx, right_iris_idx, left_eye_idx, right_eye_idx):
-    """프레임 시퀀스 → fixation/aversion 연속 구간 리스트"""
+def _smooth(prev, new, alpha=0.3):
+    """(yaw, pitch, ox, oy) 튜플에 대한 EMA 스무딩 — 프레임 잡음으로 인한 순간적인
+    fixation/aversion 뒤집힘(flicker)을 줄인다."""
+    if prev is None:
+        return new
+    return tuple(alpha * n + (1 - alpha) * p for n, p in zip(new, prev))
+
+
+def _merge_short_segments(segments, min_duration=0.3):
+    """min_duration보다 짧은 구간은 노이즈로 보고 이전 구간에 흡수하고,
+    그 결과 같은 타입이 연속되면 하나로 합친다 (hysteresis 효과)."""
+    if not segments:
+        return segments
+    merged = [dict(segments[0])]
+    for seg in segments[1:]:
+        prev = merged[-1]
+        too_short = (seg["end"] - seg["start"]) < min_duration
+        same_type = seg["type"] == prev["type"]
+        if too_short or same_type:
+            prev["end"] = seg["end"]
+        else:
+            merged.append(dict(seg))
+    return merged
+
+
+def detect_gaze_segments(frames, pose_idx, left_iris_idx, right_iris_idx, left_eye_idx, right_eye_idx,
+                          baseline_yaw=0.0, baseline_pitch=0.0,
+                          smoothing_alpha=0.3, min_segment_sec=0.3):
+    """프레임 시퀀스 → fixation/aversion 연속 구간 리스트.
+
+    - 얼굴 미검출 프레임은 aversion으로 처리한다 (화면 밖으로 나간 것도 회피로 봄 —
+      예전엔 그냥 건너뛰어서 그 시간이 통째로 누락됐음).
+    - yaw/pitch/눈동자offset은 EMA로 스무딩해서 프레임 잡음으로 인한 flicker를 줄인다.
+    - baseline_yaw/pitch: calibrate_baseline_gaze()로 잡은 개인별 "정면" 기준.
+    - 마지막에 min_segment_sec보다 짧게 쪼개진 구간은 이전 구간에 흡수한다.
+    """
     segments = []
     current_state = None
     seg_start = None
     last_t = None
+    smoothed = None
 
     for f in frames:
         if f["landmarks"] is None:
-            continue
-        yaw, pitch, _ = estimate_head_pose(f["landmarks"], f["frame_size"], pose_idx)
-        ox, oy = compute_iris_offset(f["landmarks"], left_iris_idx, right_iris_idx, left_eye_idx, right_eye_idx)
-        looking = is_looking_at_camera(yaw, pitch, ox, oy)
-        state = "fixation" if looking else "aversion"
+            state = "aversion"
+        else:
+            yaw, pitch, _ = estimate_head_pose(f["landmarks"], f["frame_size"], pose_idx)
+            ox, oy = compute_iris_offset(f["landmarks"], left_iris_idx, right_iris_idx, left_eye_idx, right_eye_idx)
+            smoothed = _smooth(smoothed, (yaw, pitch, ox, oy), alpha=smoothing_alpha)
+            s_yaw, s_pitch, s_ox, s_oy = smoothed
+            looking = is_looking_at_camera(s_yaw, s_pitch, s_ox, s_oy, baseline_yaw, baseline_pitch)
+            state = "fixation" if looking else "aversion"
 
-        #fprint(f"[DEBUG] t={f['t']:.2f} yaw={yaw:.1f} pitch={pitch:.1f} ox={ox:.3f} oy={oy:.3f} looking={looking}")
+        #print(f"[DEBUG] t={f['t']:.2f} state={state}")
 
         if state != current_state:
             if current_state is not None:
@@ -94,4 +135,4 @@ def detect_gaze_segments(frames, pose_idx, left_iris_idx, right_iris_idx, left_e
     if current_state is not None and last_t is not None:
         segments.append({"type": current_state, "start": seg_start, "end": last_t})
 
-    return segments
+    return _merge_short_segments(segments, min_duration=min_segment_sec)

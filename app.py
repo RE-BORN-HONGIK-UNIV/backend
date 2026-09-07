@@ -31,11 +31,14 @@ from step2.landmark_face_points import (
     extract_landmarks_from_video, LEFT_EYE_EAR_IDX, RIGHT_EYE_EAR_IDX,
     POSE_LANDMARK_IDX, LEFT_IRIS_IDX, RIGHT_IRIS_IDX,
 )
-from step2.blink_analyzer import compute_ear_series, detect_blinks
+from step2.blink_analyzer import (
+    compute_ear_series, detect_blinks,
+    compute_blink_blendshape_series, detect_blinks_from_blendshape,
+)
 from step2.gaze_analyzer import detect_gaze_segments
 from step2.expression_analyzer import compute_expression_series, summarize_expression
 from step2.scoring import score_blink_rate, score_gaze_segments, score_expression
-from step2.set_baseline import calibrate_baseline_ear
+from step2.set_baseline import calibrate_baseline_ear, calibrate_baseline_gaze
 
 # Step1 LLM 코칭 피드백 (선택적 — 키 없으면 자동 폴백)
 from step1_llm_feedback import generate_feedback
@@ -490,16 +493,26 @@ def analyze_gaze_blink():
         # 앞 5초를 캘리브레이션(개인별 기준값) 구간으로 사용
         calib_frames = [f for f in frames if f["t"] <= 5.0]
         baseline_ear = calibrate_baseline_ear(calib_frames, LEFT_EYE_EAR_IDX, RIGHT_EYE_EAR_IDX)
+        baseline_yaw, baseline_pitch = calibrate_baseline_gaze(
+            calib_frames, POSE_LANDMARK_IDX, LEFT_IRIS_IDX, RIGHT_IRIS_IDX,
+            LEFT_EYE_EAR_IDX, RIGHT_EYE_EAR_IDX,
+        )
 
-        # 눈 깜빡임
-        ear_series = compute_ear_series(frames, LEFT_EYE_EAR_IDX, RIGHT_EYE_EAR_IDX)
-        blinks = detect_blinks(ear_series, baseline_ear)
+        # 눈 깜빡임 — blendshape(신경망 학습 신호)가 있으면 그걸 우선 쓰고,
+        # 없는 영상(구버전 모델 등)이면 EAR 기하학 계산으로 폴백
+        blink_series = compute_blink_blendshape_series(frames)
+        if any(score is not None for _, score in blink_series):
+            blinks = detect_blinks_from_blendshape(blink_series)
+        else:
+            ear_series = compute_ear_series(frames, LEFT_EYE_EAR_IDX, RIGHT_EYE_EAR_IDX)
+            blinks = detect_blinks(ear_series, baseline_ear)
         blink_result = score_blink_rate(len(blinks), duration_sec)
 
         # 시선 고정
         gaze_segments = detect_gaze_segments(
             frames, POSE_LANDMARK_IDX, LEFT_IRIS_IDX, RIGHT_IRIS_IDX,
             LEFT_EYE_EAR_IDX, RIGHT_EYE_EAR_IDX,
+            baseline_yaw=baseline_yaw, baseline_pitch=baseline_pitch,
         )
         gaze_result = score_gaze_segments(gaze_segments)
 

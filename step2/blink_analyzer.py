@@ -23,7 +23,8 @@ def compute_ear_series(frames, left_idx, right_idx):
 
 
 def detect_blinks(ear_series, baseline_ear, drop_ratio=0.7, min_blink_duration=0.08):
-    """baseline_ear 대비 drop_ratio 이하로 떨어진 연속 구간을 blink로 판정"""
+    """baseline_ear 대비 drop_ratio 이하로 떨어진 연속 구간을 blink로 판정.
+    (blendshape가 없는 영상을 위한 폴백 — 카메라 각도/조명에 덜 강건함)"""
     threshold = baseline_ear * drop_ratio
     blinks = []
     in_blink = False
@@ -36,6 +37,41 @@ def detect_blinks(ear_series, baseline_ear, drop_ratio=0.7, min_blink_duration=0
             in_blink = True
             blink_start = t
         elif ear >= threshold and in_blink:
+            in_blink = False
+            duration = t - blink_start
+            if duration >= min_blink_duration:
+                blinks.append({"start": blink_start, "end": t})
+    return blinks
+
+
+def compute_blink_blendshape_series(frames):
+    """MediaPipe의 eyeBlinkLeft/Right blendshape 평균 → 시간별 (t, score) 리스트.
+    EAR(눈꺼풀 좌표 기하학)보다 카메라 각도·조명에 훨씬 강건한, 학습된 blink 신호.
+    blendshape가 없는 프레임(또는 얼굴 미검출)은 (t, None)."""
+    series = []
+    for f in frames:
+        bs = f.get("blendshapes")
+        if bs is None:
+            series.append((f["t"], None))
+            continue
+        score = (bs.get("eyeBlinkLeft", 0.0) + bs.get("eyeBlinkRight", 0.0)) / 2
+        series.append((f["t"], score))
+    return series
+
+
+def detect_blinks_from_blendshape(blink_series, threshold=0.5, min_blink_duration=0.08):
+    """blink blendshape score가 threshold 이상으로 올라간 연속 구간을 blink로 판정."""
+    blinks = []
+    in_blink = False
+    blink_start = None
+
+    for t, score in blink_series:
+        if score is None:
+            continue
+        if score >= threshold and not in_blink:
+            in_blink = True
+            blink_start = t
+        elif score < threshold and in_blink:
             in_blink = False
             duration = t - blink_start
             if duration >= min_blink_duration:
