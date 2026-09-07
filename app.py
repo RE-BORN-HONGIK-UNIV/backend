@@ -7,6 +7,7 @@ Re-born 보이스 터치 - Flask 백엔드 (최종 버전)
 
 import os
 import io
+import subprocess
 import tempfile
 import numpy as np
 import librosa
@@ -36,7 +37,7 @@ from step2.blink_analyzer import (
     compute_blink_blendshape_series, detect_blinks_from_blendshape,
 )
 from step2.gaze_analyzer import detect_gaze_segments
-from step2.expression_analyzer import compute_expression_series, summarize_expression
+from step2.expression_analyzer import compute_expression_series, summarize_expression, detect_expression_segments
 from step2.scoring import score_blink_rate, score_gaze_segments, score_expression
 from step2.set_baseline import calibrate_baseline_ear, calibrate_baseline_gaze
 
@@ -161,6 +162,36 @@ def save_temp_file(file_storage):
     file_storage.save(tmp_path)
     print(f"[INFO] 임시 파일 저장: {tmp_path}")
     return tmp_path
+
+
+def save_temp_video(file_storage):
+    """영상 업로드를 원본 확장자 그대로 임시 저장 (mp4/mov/webm 등)."""
+    tmp_dir = tempfile.gettempdir()
+    ext = os.path.splitext(file_storage.filename or "")[1].lower() or ".mp4"
+    tmp_path = os.path.join(tmp_dir, f"reborn_video_{os.getpid()}{ext}")
+    file_storage.save(tmp_path)
+    print(f"[INFO] 임시 영상 저장: {tmp_path}")
+    return tmp_path
+
+
+def ensure_mp4(video_path):
+    """영상을 mp4로 통일한다 — mov/webm 등이 들어오면 ffmpeg으로 변환.
+    이미 mp4면 그대로 반환. 변환 실패(ffmpeg 없음 등) 시에는 원본 경로를 그대로
+    반환하고 분석은 계속 진행한다 (OpenCV가 원본 포맷을 읽을 수 있는 경우가 많음).
+    반환값이 입력과 다르면 호출측에서 변환된 파일도 정리(삭제)해야 한다."""
+    if video_path.lower().endswith(".mp4"):
+        return video_path
+    mp4_path = os.path.splitext(video_path)[0] + "_converted.mp4"
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", video_path, "-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac", mp4_path],
+            check=True, capture_output=True, timeout=120,
+        )
+        print(f"[OK] mp4 변환 완료: {video_path} -> {mp4_path}")
+        return mp4_path
+    except Exception as e:
+        print(f"[WARNING] mp4 변환 실패, 원본 포맷으로 분석 진행: {e}")
+        return video_path
 
 # ── 멜스펙트로그램 변환 (3초 조각) ───────────────────────────────────
 def audio_chunk_to_melspectrogram(y_chunk, sr):
@@ -484,10 +515,14 @@ def analyze_gaze_blink():
 
     video_file = request.files['file']
     tmp_path = None
+    converted_path = None
     try:
-        tmp_path = save_temp_file(video_file)
+        tmp_path = save_temp_video(video_file)
+        analysis_path = ensure_mp4(tmp_path)
+        if analysis_path != tmp_path:
+            converted_path = analysis_path  # mov/webm -> mp4 변환 결과, 별도 정리 필요
 
-        frames = extract_landmarks_from_video(tmp_path)
+        frames = extract_landmarks_from_video(analysis_path)
         duration_sec = frames[-1]["t"] if frames else 0
 
         # 앞 5초를 캘리브레이션(개인별 기준값) 구간으로 사용
@@ -522,11 +557,12 @@ def analyze_gaze_blink():
         expression_result = score_expression(
             expression_summary["smile_ratio"], expression_summary["tension_ratio"]
         )
+        expression_segments = detect_expression_segments(expression_series)
 
         return jsonify({
             "blink": {**blink_result, "events": blinks},
             "gaze": {**gaze_result, "segments": gaze_segments},
-            "expression": {**expression_result, **expression_summary},
+            "expression": {**expression_result, **expression_summary, "segments": expression_segments},
         })
 
     except Exception as e:
@@ -535,11 +571,12 @@ def analyze_gaze_blink():
         return jsonify({'error': str(e), 'detail': traceback.format_exc()}), 500
 
     finally:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except:
-                pass
+        for p in (tmp_path, converted_path):
+            if p and os.path.exists(p):
+                try:
+                    os.remove(p)
+                except:
+                    pass
 # ▲▲▲ [추가 끝] ▲▲▲
 
 @app.route('/analyze/feedback', methods=['POST'])
