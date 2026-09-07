@@ -33,7 +33,8 @@ from step2.landmark_face_points import (
 )
 from step2.blink_analyzer import compute_ear_series, detect_blinks
 from step2.gaze_analyzer import detect_gaze_segments
-from step2.scoring import score_blink_rate, score_gaze_segments
+from step2.expression_analyzer import compute_expression_series, summarize_expression
+from step2.scoring import score_blink_rate, score_gaze_segments, score_expression
 from step2.set_baseline import calibrate_baseline_ear
 
 # Step1 LLM 코칭 피드백 (선택적 — 키 없으면 자동 폴백)
@@ -502,9 +503,17 @@ def analyze_gaze_blink():
         )
         gaze_result = score_gaze_segments(gaze_segments)
 
+        # 표정 (미소/긴장)
+        expression_series = compute_expression_series(frames)
+        expression_summary = summarize_expression(expression_series)
+        expression_result = score_expression(
+            expression_summary["smile_ratio"], expression_summary["tension_ratio"]
+        )
+
         return jsonify({
             "blink": {**blink_result, "events": blinks},
             "gaze": {**gaze_result, "segments": gaze_segments},
+            "expression": {**expression_result, **expression_summary},
         })
 
     except Exception as e:

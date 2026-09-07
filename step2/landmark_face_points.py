@@ -26,12 +26,14 @@ options = vision.FaceLandmarkerOptions(
     base_options=base_options,
     running_mode=vision.RunningMode.VIDEO,
     num_faces=1,
+    output_face_blendshapes=True,  # 표정(미소·찡그림 등) 52종 점수 — expression_analyzer.py 에서 사용
 )
 
 
 def extract_landmarks_from_video(video_path, sample_fps=15):
-    """영상을 읽어서 프레임별 landmark 좌표 리스트를 반환.
-    반환: [{ "t": 초, "landmarks": (478,3) ndarray 또는 None, "frame_size": (w,h) }, ...]
+    """영상을 읽어서 프레임별 landmark 좌표 + 표정 blendshape 리스트를 반환.
+    반환: [{ "t": 초, "landmarks": (478,3) ndarray 또는 None, "frame_size": (w,h),
+             "blendshapes": {카테고리명: score(0~1)} 또는 None }, ...]
     """
     cap = cv2.VideoCapture(video_path)
     orig_fps = cap.get(cv2.CAP_PROP_FPS) or 30
@@ -56,9 +58,18 @@ def extract_landmarks_from_video(video_path, sample_fps=15):
                 if result.face_landmarks:
                     lm = result.face_landmarks[0]
                     coords = np.array([[p.x * w, p.y * h, p.z * w] for p in lm])
-                    results_list.append({"t": t_sec, "landmarks": coords, "frame_size": (w, h)})
+                    blendshapes = None
+                    if result.face_blendshapes:
+                        blendshapes = {c.category_name: c.score for c in result.face_blendshapes[0]}
+                    results_list.append({
+                        "t": t_sec, "landmarks": coords, "frame_size": (w, h),
+                        "blendshapes": blendshapes,
+                    })
                 else:
-                    results_list.append({"t": t_sec, "landmarks": None, "frame_size": (w, h)})
+                    results_list.append({
+                        "t": t_sec, "landmarks": None, "frame_size": (w, h),
+                        "blendshapes": None,
+                    })
             frame_idx += 1
     cap.release()
     return results_list
