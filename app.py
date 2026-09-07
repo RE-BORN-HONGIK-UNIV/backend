@@ -7,8 +7,10 @@ Re-born 보이스 터치 - Flask 백엔드 (최종 버전)
 
 import os
 import io
+import base64
 import subprocess
 import tempfile
+import time
 import numpy as np
 import librosa
 import librosa.display
@@ -192,6 +194,71 @@ def ensure_mp4(video_path):
     except Exception as e:
         print(f"[WARNING] mp4 변환 실패, 원본 포맷으로 분석 진행: {e}")
         return video_path
+
+
+def build_highlight_clip(video_path, segments, max_total_sec=15.0, pad_sec=0.3):
+    """(start, end) 구간들만 앞뒤로 pad_sec씩 여유를 두고 잘라 이어붙인 짧은 하이라이트
+    mp4를 만들어 data URL(base64)로 반환한다. 구간이 없거나 실패하면 None.
+    - 원본 영상을 그대로 다 보여주는 대신, "이 표정/시선이 나온 부분"만 편집해서 보여주기 위함.
+    - max_total_sec: 하이라이트 총 길이 상한 (구간이 너무 많으면 앞에서부터 이만큼만 사용).
+    """
+    if not segments:
+        return None
+
+    tmp_dir = tempfile.gettempdir()
+    uid = f"{os.getpid()}_{int(time.time() * 1000)}"
+    part_paths = []
+    try:
+        total = 0.0
+        for i, (start, end) in enumerate(segments):
+            if total >= max_total_sec:
+                break
+            s = max(0.0, start - pad_sec)
+            dur = min((end - start) + 2 * pad_sec, max_total_sec - total)
+            if dur <= 0.05:
+                continue
+            part_path = os.path.join(tmp_dir, f"rb_hl_{uid}_{i}.mp4")
+            subprocess.run(
+                ["ffmpeg", "-y", "-ss", f"{s:.3f}", "-i", video_path, "-t", f"{dur:.3f}",
+                 "-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac", part_path],
+                check=True, capture_output=True, timeout=60,
+            )
+            part_paths.append(part_path)
+            total += dur
+
+        if not part_paths:
+            return None
+
+        if len(part_paths) == 1:
+            final_path = part_paths[0]
+        else:
+            list_path = os.path.join(tmp_dir, f"rb_hl_{uid}_list.txt")
+            with open(list_path, "w", encoding="utf-8") as f:
+                for p in part_paths:
+                    f.write(f"file '{p}'\n")
+            final_path = os.path.join(tmp_dir, f"rb_hl_{uid}_final.mp4")
+            subprocess.run(
+                ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path, "-c", "copy", final_path],
+                check=True, capture_output=True, timeout=60,
+            )
+            os.remove(list_path)
+
+        with open(final_path, "rb") as f:
+            data = base64.b64encode(f.read()).decode("ascii")
+
+        if final_path not in part_paths:
+            os.remove(final_path)
+        return f"data:video/mp4;base64,{data}"
+    except Exception as e:
+        print(f"[WARNING] 하이라이트 클립 생성 실패: {e}")
+        return None
+    finally:
+        for p in part_paths:
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except:
+                    pass
 
 # ── 멜스펙트로그램 변환 (3초 조각) ───────────────────────────────────
 def audio_chunk_to_melspectrogram(y_chunk, sr):
@@ -559,10 +626,25 @@ def analyze_gaze_blink():
         )
         expression_segments = detect_expression_segments(expression_series)
 
+        # 지표별 하이라이트 클립 — 원본을 통째로 보여주는 대신, 해당 순간만 편집한 짧은 영상.
+        # 시선/표정은 "눈에 띄는" 쪽(회피/미소·긴장)만, 깜빡임은 이벤트 전부를 재료로 쓴다.
+        blink_highlight = build_highlight_clip(
+            analysis_path, [(e["start"], e["end"]) for e in blinks]
+        )
+        gaze_highlight = build_highlight_clip(
+            analysis_path, [(s["start"], s["end"]) for s in gaze_segments if s["type"] == "aversion"]
+        )
+        expression_highlight = build_highlight_clip(
+            analysis_path, [(s["start"], s["end"]) for s in expression_segments if s["type"] != "neutral"]
+        )
+
         return jsonify({
-            "blink": {**blink_result, "events": blinks},
-            "gaze": {**gaze_result, "segments": gaze_segments},
-            "expression": {**expression_result, **expression_summary, "segments": expression_segments},
+            "blink": {**blink_result, "events": blinks, "highlight": blink_highlight},
+            "gaze": {**gaze_result, "segments": gaze_segments, "highlight": gaze_highlight},
+            "expression": {
+                **expression_result, **expression_summary,
+                "segments": expression_segments, "highlight": expression_highlight,
+            },
         })
 
     except Exception as e:
