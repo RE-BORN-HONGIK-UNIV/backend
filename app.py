@@ -6,6 +6,9 @@ Re-born 보이스 터치 - Flask 백엔드 (최종 버전)
 """
 
 import os
+from dotenv import load_dotenv
+load_dotenv()  # .env 파일 읽어서 환경변수로 등록
+
 import io
 import base64
 import subprocess
@@ -45,6 +48,9 @@ from step2.set_baseline import calibrate_baseline_ear, calibrate_baseline_gaze
 
 # Step1 LLM 코칭 피드백 (선택적 — 키 없으면 자동 폴백)
 from step1_llm_feedback import generate_feedback
+
+# Step3 면접 질문 생성 (선택적 — 키 없으면 자동 폴백)
+from step3_interview_question import generate_question
 
 try:
     import whisper
@@ -670,9 +676,26 @@ def analyze_feedback():
     text = generate_feedback(result)
     return jsonify({'feedback': text, 'source': 'llm' if text else 'template'})
 
+@app.route('/interview/next-question', methods=['POST'])
+def interview_next_question():
+    """Step 3 · 다음 면접 질문 생성.
+    body: { "tier": "warmup" | "standard" | "practice", "previous_questions": [str, ...] }
+    """
+    data = request.get_json(silent=True) or {}
+    tier = data.get('tier', 'standard')
+    previous_questions = data.get('previous_questions', [])
+
+    if tier not in ('warmup', 'standard', 'practice'):
+        return jsonify({'error': "tier는 'warmup' | 'standard' | 'practice' 중 하나여야 합니다"}), 400
+
+    question, source = generate_question(tier, previous_questions)
+    return jsonify({'question': question, 'source': source})
 
 if __name__ == '__main__':
     load_models()
-    with app.app_context():
-        db.create_all()
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    try:
+        with app.app_context():
+            db.create_all()
+    except Exception as e:
+        print(f"[WARNING] DB 연결 실패, DB 없이 서버 실행: {e}")
+    app.run(host='0.0.0.0', port=5000, debug=True)
