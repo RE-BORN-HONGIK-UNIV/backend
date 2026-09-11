@@ -442,7 +442,7 @@ def analyze_filler(audio_path):
             "filler_ratio":         round(filler_ratio, 4),
             "fluency_score":        fluency_score,
         }
-    except Exception as e:
+    except Exception:
         import traceback
         print(f"[ERROR] filler 분석 실패: {traceback.format_exc()}")
         return {
