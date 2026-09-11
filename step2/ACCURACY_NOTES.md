@@ -20,8 +20,21 @@ CNN 모델 정확도까지 실측 보고(prolongation 80.85% / energy 76.61% / t
 - 깜빡임·시선: 1단계와 동급 — 실제 논문 인용 가능한 상태.
 - 미소·긴장: 아직 1단계 수준 미달. **문헌으로는 더 못 채움** (직접 확인함 — MediaPipe 공식 문서·FACS 강도 척도(A~E) 어디에도 blendshape 스코어(0~1) 대상 표준 컷오프 없음). 유일한 다음 단계는 **팀 자체 라벨링 데이터 확보**뿐 — 1단계가 자체 정상 발화 463개로 pause 임계값을 검증한 것과 같은 방식.
 
-## 다음 액션
+## 다음 액션 — 도구 준비 완료, 영상 데이터 대기 중 (2026-09-11)
 
-1. 얼굴 나오는 원본 영상 중 일부를 골라 "이 프레임은 웃는 게 맞다/아니다", "긴장한 게 맞다/아니다"를 사람이 직접 라벨링 (최소 수십 개 프레임 단위 샘플)
-2. 라벨과 blendshape 점수를 대조해서 0.35/0.4가 실제로 분리가 되는 값인지 confusion matrix로 확인
-3. 안 맞으면 ROC 커브 등으로 임계값 재산출, 맞으면 이 문서에 "검증 완료"로 갱신
+`tests/labeling/`에 라벨링 파이프라인 만들어둠. 실제 얼굴 영상만 생기면 바로 돌릴 수 있음.
+
+1. **`python tests/labeling/extract_label_candidates.py <video_path>`**
+   영상에서 1초 간격으로 프레임 이미지 + 그 순간의 미소/긴장/깜빡임 blendshape
+   점수를 `label_candidates/labels.csv`에 뽑아줌. `label_smile` / `label_tension`
+   / `label_blink` 칸은 비워둔 채로 생성됨.
+2. 사람이 `label_candidates/` 이미지를 직접 보면서 위 칸에 0(아니다)/1(맞다)로 채워넣음
+   (최소 수십 프레임 — 영상 여러 개 합쳐도 됨, CSV만 이어붙이면 됨)
+3. **`python tests/labeling/evaluate_threshold.py label_candidates/labels.csv`**
+   현재 임계값(미소 0.35 / 긴장 0.4)의 accuracy/precision/recall을 confusion
+   matrix로 보여주고, 0.05 간격으로 스윕해서 가장 정확도 높은 임계값도 같이 알려줌
+4. 결과 보고 임계값 유지/변경 결정 → 이 문서 표의 "근거 상태"를 "검증 완료"로 갱신
+
+**막힌 지점**: 라벨링에 쓸 실제 얼굴 영상이 아직 없음 (1단계 "원본 수집"과 같은
+데이터 소스 필요 — 팀에서 수집 중인 원본 중 얼굴 나오는 영상 확보되는 대로 위
+파이프라인 실행)
