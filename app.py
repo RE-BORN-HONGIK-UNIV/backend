@@ -29,6 +29,12 @@ import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()  # .env 파일이 있으면 읽어옴 (없으면 그냥 넘어감 — python-dotenv는 선택 설치)
+except ImportError:
+    pass
+
 # Step2 시선/깜빡임 모듈 import
 from step2.landmark_face_points import (
     extract_landmarks_from_video, LEFT_EYE_EAR_IDX, RIGHT_EYE_EAR_IDX,
@@ -53,11 +59,23 @@ except ImportError:
     WHISPER_AVAILABLE = False
     print("[WARNING] whisper 없음 - 발화 유창성 0점 고정")
 
+def _require_env(key):
+    """비밀번호/서명키처럼 코드에 하드코딩하면 안 되는 값 — .env 또는 환경변수로 필수 주입.
+    backend/.env.example 참고해서 backend/.env 만들 것 (.env는 .gitignore에 이미 포함됨)."""
+    value = os.environ.get(key)
+    if not value:
+        raise RuntimeError(
+            f"환경변수 {key}가 설정되지 않았습니다. backend/.env.example을 참고해 "
+            f"backend/.env 파일을 만들어주세요."
+        )
+    return value
+
+
 app = Flask(__name__)
 CORS(app)
 
-app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://root:qaqa8150!@localhost/reborn_db'
-app.config['SECRET_KEY'] = 'dev-secret-key-change-later'
+app.config['SQLALCHEMY_DATABASE_URI'] = _require_env('DATABASE_URL')
+app.config['SECRET_KEY'] = _require_env('SECRET_KEY')
 db = SQLAlchemy(app)
 
 class User(db.Model):
