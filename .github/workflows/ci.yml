@@ -43,6 +43,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
+          # cache: pip 안 씀 — requirements.txt/pyproject.toml이 레포에 없어서
+          # 캐시 키를 못 잡고 setup-python 자체가 에러로 죽음 (실제로 한 번 겪음)
       - run: pip install numpy pytest
       - run: pytest tests/test_scoring.py tests/test_blink_analyzer.py tests/test_expression_analyzer.py -v
