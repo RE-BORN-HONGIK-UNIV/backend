@@ -20,13 +20,14 @@ import librosa.display
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
 import datetime
 from flask_cors import CORS
 from PIL import Image
+from step3_tts import synthesize_speech
 
 import torch
 import torch.nn as nn
@@ -690,6 +691,22 @@ def interview_next_question():
 
     question, source = generate_question(tier, previous_questions)
     return jsonify({'question': question, 'source': source})
+
+
+@app.route('/interview/tts', methods=['POST'])
+def interview_tts():
+    """Step 3 · 질문 텍스트 → mp3 음성. body: { "text": "..." }"""
+    data = request.get_json(silent=True) or {}
+    text = data.get('text', '').strip()
+    if not text:
+        return jsonify({'error': 'text가 필요합니다'}), 400
+
+    audio_bytes = synthesize_speech(text)
+    if audio_bytes is None:
+        return jsonify({'error': 'TTS 생성 실패 (키 없음 또는 호출 오류)'}), 502
+
+    return Response(audio_bytes, mimetype='audio/mpeg')
+
 
 if __name__ == '__main__':
     load_models()
