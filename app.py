@@ -70,6 +70,49 @@ class User(db.Model):
     terms_agreed = db.Column(db.Boolean, default=False, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
+
+class Stage2Result(db.Model):
+    """2단계(표정·시선) 분석 결과 — 세션 간 비교("지난번엔 ~했어요")를 위해 유저별로 쌓아둔다.
+    프론트 localStorage 이력을 대체 (기기 바뀌면 날아가던 문제 해결)."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+    blink_rate_per_min = db.Column(db.Float, nullable=False)
+    blink_status = db.Column(db.String(20), nullable=False)
+    blink_score = db.Column(db.Float, nullable=False)
+
+    avg_fixation_sec = db.Column(db.Float, nullable=False)
+    gaze_score = db.Column(db.Float, nullable=False)
+
+    smile_ratio = db.Column(db.Float, nullable=False)
+    tension_ratio = db.Column(db.Float, nullable=False)
+    expression_score = db.Column(db.Float, nullable=False)
+    expression_status = db.Column(db.String(20), nullable=False)
+
+    def to_entry(self):
+        """프론트 Stage2Entry와 동일한 shape — 그대로 previous 비교에 쓸 수 있게."""
+        return {
+            "at": self.created_at.isoformat(),
+            "blinkRatePerMin": self.blink_rate_per_min,
+            "avgFixationSec": self.avg_fixation_sec,
+            "smileRatio": self.smile_ratio,
+            "tensionRatio": self.tension_ratio,
+        }
+
+
+def get_current_user():
+    """Authorization: Bearer <token> 헤더의 JWT를 검증해 User를 반환. 없거나 무효하면 None."""
+    header = request.headers.get('Authorization', '')
+    if not header.startswith('Bearer '):
+        return None
+    token = header[len('Bearer '):]
+    try:
+        payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
+    except jwt.PyJWTError:
+        return None
+    return User.query.get(payload.get('user_id'))
+
 MODEL_PATH = os.environ.get("MODEL_PATH", "best_size_large.pth")
 PAUSE_THRESHOLD = 1.2
 
@@ -577,6 +620,10 @@ def analyze():
 # ▼▼▼ [추가] Step2 시선/깜빡임 분석 라우트 ▼▼▼
 @app.route('/analyze/gaze-blink', methods=['POST'])
 def analyze_gaze_blink():
+    user = get_current_user()
+    if user is None:
+        return jsonify({'error': '로그인이 필요합니다'}), 401
+
     if 'file' not in request.files:
         return jsonify({'error': '파일이 없습니다'}), 400
 
@@ -626,6 +673,30 @@ def analyze_gaze_blink():
         )
         expression_segments = detect_expression_segments(expression_series)
 
+        # 이번 결과를 저장하고, 비교에 쓸 "직전 기록"을 먼저 가져온다 (저장 전에 조회해야
+        # 방금 넣은 레코드 자신이 previous로 잡히지 않는다).
+        previous_row = (
+            Stage2Result.query
+            .filter_by(user_id=user.id)
+            .order_by(Stage2Result.created_at.desc())
+            .first()
+        )
+        previous_entry = previous_row.to_entry() if previous_row else None
+
+        db.session.add(Stage2Result(
+            user_id=user.id,
+            blink_rate_per_min=blink_result['rate_per_min'],
+            blink_status=blink_result['status'],
+            blink_score=blink_result['score'],
+            avg_fixation_sec=gaze_result['avg_fixation_sec'],
+            gaze_score=gaze_result['score'],
+            smile_ratio=expression_summary['smile_ratio'],
+            tension_ratio=expression_summary['tension_ratio'],
+            expression_score=expression_result['score'],
+            expression_status=expression_result['status'],
+        ))
+        db.session.commit()
+
         # 지표별 하이라이트 클립 — 원본을 통째로 보여주는 대신, 해당 순간만 편집한 짧은 영상.
         # 시선/표정은 "눈에 띄는" 쪽(회피/미소·긴장)만, 깜빡임은 이벤트 전부를 재료로 쓴다.
         blink_highlight = build_highlight_clip(
@@ -645,6 +716,7 @@ def analyze_gaze_blink():
                 **expression_result, **expression_summary,
                 "segments": expression_segments, "highlight": expression_highlight,
             },
+            "previous": previous_entry,
         })
 
     except Exception as e:
