@@ -9,6 +9,8 @@ MediaPipe FaceLandmarker가 뽑아주는 52개 ARKit 스타일 blendshape 중,
 SMILE_KEYS = ["mouthSmileLeft", "mouthSmileRight"]
 TENSION_KEYS = ["browDownLeft", "browDownRight", "eyeSquintLeft", "eyeSquintRight"]
 
+# 근거자료 없는 잠정치 — MediaPipe blendshape 점수 스케일에 대한 엔지니어링 추정.
+# 팀 자체 라벨링 데이터(눈으로 봐도 웃음/긴장이 맞는지)로 검증·조정 필요 (2025-09 재검토).
 SMILE_THRESHOLD = 0.35
 TENSION_THRESHOLD = 0.4
 
