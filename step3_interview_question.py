@@ -79,12 +79,23 @@ def _fallback_question(tier: str, previous_questions: list[str]) -> str:
     return random.choice(remaining)
 
 
-def _user_prompt(tier: str, previous_questions: list[str]) -> str:
+def _user_prompt(tier: str, previous_questions: list[str], previous_answer: str | None = None) -> str:
     instr = TIER_INSTRUCTIONS.get(tier, TIER_INSTRUCTIONS["standard"])
     asked = "\n".join(f"- {q}" for q in previous_questions) if previous_questions else "(아직 없음)"
+
+    answer_section = ""
+    if previous_answer:
+        answer_section = (
+            f"\n\n[방금 사용자 답변]\n{previous_answer}\n\n"
+            "이 답변 내용과 자연스럽게 이어지는 질문을 만들어주세요. "
+            "답변에 더 자세히 물어볼 만한 부분이 있으면 꼬리질문으로, "
+            "없으면 자연스러운 다음 질문으로 넘어가세요."
+        )
+
     return (
         f"{instr}\n\n"
-        f"[이미 나온 질문]\n{asked}\n\n"
+        f"[이미 나온 질문]\n{asked}"
+        f"{answer_section}\n\n"
         "다음 질문을 1개만 생성해주세요."
     )
 
@@ -92,6 +103,7 @@ def _user_prompt(tier: str, previous_questions: list[str]) -> str:
 def generate_question(
     tier: str,
     previous_questions: list[str] | None = None,
+    previous_answer: str | None = None,
     timeout: float = 15.0,
 ) -> tuple[str, str]:
     """(질문, source) 반환. source는 'llm' 또는 'fallback'."""
@@ -110,7 +122,7 @@ def generate_question(
                 "text": COMMON_RULES,
                 "cache_control": {"type": "ephemeral"},
             }],
-            messages=[{"role": "user", "content": _user_prompt(tier, previous_questions)}],
+            messages=[{"role": "user", "content": _user_prompt(tier, previous_questions, previous_answer)}],
         )
         text = "".join(b.text for b in resp.content if b.type == "text").strip()
         if text:

@@ -677,19 +677,25 @@ def analyze_feedback():
     text = generate_feedback(result)
     return jsonify({'feedback': text, 'source': 'llm' if text else 'template'})
 
+
 @app.route('/interview/next-question', methods=['POST'])
 def interview_next_question():
     """Step 3 · 다음 면접 질문 생성.
-    body: { "tier": "warmup" | "standard" | "practice", "previous_questions": [str, ...] }
+    body: {
+      "tier": "warmup" | "standard" | "practice",
+      "previous_questions": [str, ...],
+      "previous_answer": str (선택 — STT로 변환된 방금 답변 텍스트, 꼬리질문용)
+    }
     """
     data = request.get_json(silent=True) or {}
     tier = data.get('tier', 'standard')
     previous_questions = data.get('previous_questions', [])
+    previous_answer = data.get('previous_answer')
 
     if tier not in ('warmup', 'standard', 'practice'):
         return jsonify({'error': "tier는 'warmup' | 'standard' | 'practice' 중 하나여야 합니다"}), 400
 
-    question, source = generate_question(tier, previous_questions)
+    question, source = generate_question(tier, previous_questions, previous_answer)
     return jsonify({'question': question, 'source': source})
 
 
@@ -706,6 +712,47 @@ def interview_tts():
         return jsonify({'error': 'TTS 생성 실패 (키 없음 또는 호출 오류)'}), 502
 
     return Response(audio_bytes, mimetype='audio/mpeg')
+
+
+@app.route('/interview/transcribe', methods=['POST'])
+def interview_transcribe():
+    """Step 3 · 답변 영상 → 텍스트 변환 (Whisper 재사용).
+    꼬리질문 생성에 쓸 '방금 사용자가 뭐라고 답했는지'를 얻기 위함.
+    """
+    if 'file' not in request.files:
+        return jsonify({'error': '파일이 없습니다'}), 400
+
+    if not (WHISPER_AVAILABLE and whisper_model is not None):
+        # whisper 없는 환경 — 에러 대신 빈 텍스트로 응답 (꼬리질문 없이 진행되게)
+        return jsonify({'text': '', 'available': False})
+
+    video_file = request.files['file']
+    tmp_path = None
+    converted_path = None
+    try:
+        tmp_path = save_temp_video(video_file)
+        analysis_path = ensure_mp4(tmp_path)
+        if analysis_path != tmp_path:
+            converted_path = analysis_path
+
+        y16, _ = librosa.load(analysis_path, sr=16000, mono=True)
+        result = whisper_model.transcribe(y16, language="ko")
+        text = result.get("text", "").strip()
+
+        return jsonify({'text': text, 'available': True})
+
+    except Exception as e:
+        import traceback
+        print(f"[ERROR] transcribe 실패: {traceback.format_exc()}")
+        return jsonify({'error': str(e), 'text': '', 'available': False}), 500
+
+    finally:
+        for p in (tmp_path, converted_path):
+            if p and os.path.exists(p):
+                try:
+                    os.remove(p)
+                except:
+                    pass
 
 
 if __name__ == '__main__':
