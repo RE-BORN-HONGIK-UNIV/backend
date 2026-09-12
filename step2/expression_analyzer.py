@@ -8,11 +8,19 @@ MediaPipe FaceLandmarker가 뽑아주는 52개 ARKit 스타일 blendshape 중,
 
 SMILE_KEYS = ["mouthSmileLeft", "mouthSmileRight"]
 TENSION_KEYS = ["browDownLeft", "browDownRight", "eyeSquintLeft", "eyeSquintRight"]
+JAW_OPEN_KEY = "jawOpen"
 
 # 근거자료 없는 잠정치 — MediaPipe blendshape 점수 스케일에 대한 엔지니어링 추정.
 # 팀 자체 라벨링 데이터(눈으로 봐도 웃음/긴장이 맞는지)로 검증·조정 필요 (2025-09 재검토).
 SMILE_THRESHOLD = 0.35
 TENSION_THRESHOLD = 0.4
+
+# 2026-09-12 라벨링 검증(3인 48프레임)에서 발견: mouthSmile이 말하느라 입을
+# 벌린 순간(발화 조음)에도 높게 반응해서 오탐(20/48)이 심했음. jawOpen이 이
+# 임계값을 넘으면 그 프레임의 미소 점수를 0으로 무시하도록 게이팅해서
+# 오탐을 20건→5건, 정확도 56.2%→87.5%로 줄임 (evaluate_threshold.py 재검증).
+# 표본이 작아 엄밀한 최적값은 아니고, "일단 훨씬 나아짐" 수준의 잠정치.
+JAW_OPEN_GATE = 0.05
 
 
 def _avg(blendshapes, keys):
@@ -22,14 +30,16 @@ def _avg(blendshapes, keys):
 
 def compute_expression_series(frames):
     """프레임 리스트 → 시간별 (t, smile_score, tension_score) 리스트.
-    얼굴 미검출 프레임은 (t, None, None)."""
+    얼굴 미검출 프레임은 (t, None, None). 입을 벌린(말하는) 순간의 미소 오탐을
+    줄이기 위해 jawOpen이 JAW_OPEN_GATE를 넘으면 그 프레임의 미소 점수는 0으로 본다."""
     series = []
     for f in frames:
         bs = f.get("blendshapes")
         if bs is None:
             series.append((f["t"], None, None))
             continue
-        series.append((f["t"], _avg(bs, SMILE_KEYS), _avg(bs, TENSION_KEYS)))
+        smile = 0.0 if bs.get(JAW_OPEN_KEY, 0.0) > JAW_OPEN_GATE else _avg(bs, SMILE_KEYS)
+        series.append((f["t"], smile, _avg(bs, TENSION_KEYS)))
     return series
 
 
