@@ -4,8 +4,3 @@ __pycache__/
 venv/
 .venv/
 *.pth
-
-# 라벨링용으로 추출한 얼굴 프레임 이미지/CSV — 저작권·초상권 있는 실존 인물 얼굴이라
-# 절대 커밋하면 안 됨 (tests/labeling/extract_label_candidates.py 출력)
-label_candidates/
-*/label_candidates/
