@@ -47,10 +47,22 @@ def estimate_head_pose(landmarks_2d, frame_size, pose_idx):
 
 def is_looking_at_camera(yaw, pitch, iris_offset_x, iris_offset_y,
                           baseline_yaw=0.0, baseline_pitch=0.0,
-                          yaw_thresh=15, pitch_thresh=15, iris_thresh=0.15):
+                          yaw_thresh=10, pitch_thresh=10, iris_thresh=0.15):
     """머리 방향 + 눈동자 상대위치 둘 다 고려 - 고개는 정면인데 눈만 돌린 경우도 잡음.
     baseline_yaw/pitch: set_baseline.calibrate_baseline_gaze()로 잡은 개인별 "정면" 기준값.
-    웹캠이 얼굴 정면이 아닌 위치에 있는 사람의 시선 판정 편향을 보정한다."""
+    웹캠이 얼굴 정면이 아닌 위치에 있는 사람의 시선 판정 편향을 보정한다.
+
+    yaw_thresh/pitch_thresh 근거 (2026-09-12, 이전 15도에서 조정):
+    "Cone of Direct Gaze" 연구(Bell Labs 1969 계열, 화상회의 환경 재현 연구까지
+    반복 검증) — 사람이 "눈이 마주쳤다"고 인지하는 각도 범위는 수평 4.5도,
+    수직 5.5도. 단, 이 연구는 머리+눈을 합친 최종 시선 방향을 측정한 거고
+    여기서는 머리 방향(yaw/pitch)과 눈동자 위치(iris_offset)를 따로 측정해서
+    AND로 합치는 구조라 4.5/5.5를 그대로 쓸 수는 없음 — 10도는 "이전 15도보다
+    문헌에 훨씬 가깝게 좁힌" 절충값. 실제 영상 3개(48프레임 라벨링과 별개로
+    시선 3개 영상 전체 재생 검토)로 재검증: 기존 15도에서 놓치던 실제 시선
+    회피 구간(예: 3.5~3.8초, 11.9~12.4초)을 10도에서 정확히 잡아냈고, 이미
+    잘 잡던 다른 두 영상은 결과가 거의 안 바뀜(과잉 오탐 없음). 그래도 표본이
+    작아 정밀한 최적값은 아님 — 더 다양한 인물로 검증 필요."""
     return (abs(yaw - baseline_yaw) < yaw_thresh and abs(pitch - baseline_pitch) < pitch_thresh
             and abs(iris_offset_x) < iris_thresh and abs(iris_offset_y) < iris_thresh)
 
