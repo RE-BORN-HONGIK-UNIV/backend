@@ -27,7 +27,7 @@ import jwt
 import datetime
 from flask_cors import CORS
 from PIL import Image
-from step3_tts import synthesize_speech
+from step3.tts import synthesize_speech
 
 import torch
 import torch.nn as nn
@@ -54,10 +54,10 @@ from step2.scoring import score_blink_rate, score_gaze_segments, score_expressio
 from step2.set_baseline import calibrate_baseline_ear, calibrate_baseline_gaze
 
 # Step1 LLM 코칭 피드백 (선택적 — 키 없으면 자동 폴백)
-from step1_llm_feedback import generate_feedback
+from step1.llm_feedback import generate_feedback
 
 # Step3 면접 질문 생성 (선택적 — 키 없으면 자동 폴백)
-from step3_interview_question import generate_question
+from step3.interview_question import generate_question
 
 try:
     import whisper
