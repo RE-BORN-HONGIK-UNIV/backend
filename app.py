@@ -126,6 +126,46 @@ class Stage2Result(db.Model):
         }
 
 
+class Post(db.Model):
+    """'이야기' 자유 게시판 글."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+    def to_dict(self, comment_count=0, current_user=None):
+        author = User.query.get(self.user_id)
+        return {
+            'id': self.id,
+            'title': self.title,
+            'content': self.content,
+            'author': (author.nickname or author.name) if author else '탈퇴한 사용자',
+            'created_at': self.created_at.isoformat(),
+            'comment_count': comment_count,
+            'is_own': bool(current_user and current_user.id == self.user_id),
+        }
+
+
+class Comment(db.Model):
+    """게시글에 달린 댓글."""
+    id = db.Column(db.Integer, primary_key=True)
+    post_id = db.Column(db.Integer, db.ForeignKey('post.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+    def to_dict(self, current_user=None):
+        author = User.query.get(self.user_id)
+        return {
+            'id': self.id,
+            'content': self.content,
+            'author': (author.nickname or author.name) if author else '탈퇴한 사용자',
+            'created_at': self.created_at.isoformat(),
+            'is_own': bool(current_user and current_user.id == self.user_id),
+        }
+
+
 def get_current_user():
     """Authorization: Bearer <token> 헤더의 JWT를 검증해 User를 반환. 없거나 무효하면 None."""
     header = request.headers.get('Authorization', '')
@@ -757,6 +797,92 @@ def analyze_gaze_blink():
                 except:
                     pass
 # ▲▲▲ [추가 끝] ▲▲▲
+
+@app.route('/community/posts', methods=['GET'])
+def list_posts():
+    """'이야기' 게시판 · 전체 글 목록 (최신순). 로그인 안 해도 볼 수 있음."""
+    current_user = get_current_user()
+    posts = Post.query.order_by(Post.created_at.desc()).all()
+    result = []
+    for p in posts:
+        count = Comment.query.filter_by(post_id=p.id).count()
+        result.append(p.to_dict(comment_count=count, current_user=current_user))
+    return jsonify({'posts': result})
+
+
+@app.route('/community/posts', methods=['POST'])
+def create_post():
+    """'이야기' 게시판 · 글쓰기. 로그인 필요."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': '로그인이 필요합니다.'}), 401
+
+    data = request.get_json(silent=True) or {}
+    title = (data.get('title') or '').strip()
+    content = (data.get('content') or '').strip()
+    if not title or not content:
+        return jsonify({'error': '제목과 내용을 입력해주세요.'}), 400
+
+    post = Post(user_id=user.id, title=title, content=content)
+    db.session.add(post)
+    db.session.commit()
+    return jsonify(post.to_dict(current_user=user)), 201
+
+
+@app.route('/community/posts/<int:post_id>', methods=['GET'])
+def get_post(post_id):
+    """'이야기' 게시판 · 글 상세 + 댓글 목록."""
+    current_user = get_current_user()
+    post = Post.query.get(post_id)
+    if not post:
+        return jsonify({'error': '글을 찾을 수 없습니다.'}), 404
+
+    comments = Comment.query.filter_by(post_id=post_id).order_by(Comment.created_at.asc()).all()
+    data = post.to_dict(comment_count=len(comments), current_user=current_user)
+    data['comments'] = [c.to_dict(current_user=current_user) for c in comments]
+    return jsonify(data)
+
+
+@app.route('/community/posts/<int:post_id>', methods=['DELETE'])
+def delete_post(post_id):
+    """'이야기' 게시판 · 글 삭제. 본인 글만 가능."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': '로그인이 필요합니다.'}), 401
+
+    post = Post.query.get(post_id)
+    if not post:
+        return jsonify({'error': '글을 찾을 수 없습니다.'}), 404
+    if post.user_id != user.id:
+        return jsonify({'error': '본인 글만 삭제할 수 있습니다.'}), 403
+
+    Comment.query.filter_by(post_id=post_id).delete()
+    db.session.delete(post)
+    db.session.commit()
+    return jsonify({'message': '삭제됐습니다.'})
+
+
+@app.route('/community/posts/<int:post_id>/comments', methods=['POST'])
+def create_comment(post_id):
+    """'이야기' 게시판 · 댓글 작성. 로그인 필요."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': '로그인이 필요합니다.'}), 401
+
+    post = Post.query.get(post_id)
+    if not post:
+        return jsonify({'error': '글을 찾을 수 없습니다.'}), 404
+
+    data = request.get_json(silent=True) or {}
+    content = (data.get('content') or '').strip()
+    if not content:
+        return jsonify({'error': '댓글 내용을 입력해주세요.'}), 400
+
+    comment = Comment(post_id=post_id, user_id=user.id, content=content)
+    db.session.add(comment)
+    db.session.commit()
+    return jsonify(comment.to_dict(current_user=user)), 201
+
 
 @app.route('/analyze/feedback', methods=['POST'])
 def analyze_feedback():
