@@ -6,6 +6,9 @@ Re-born 보이스 터치 - Flask 백엔드 (최종 버전)
 """
 
 import os
+from dotenv import load_dotenv
+load_dotenv()  # .env 파일 읽어서 환경변수로 등록
+
 import io
 import base64
 import subprocess
@@ -17,13 +20,14 @@ import librosa.display
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
 import datetime
 from flask_cors import CORS
 from PIL import Image
+from step3_tts import synthesize_speech
 
 import torch
 import torch.nn as nn
@@ -45,6 +49,9 @@ from step2.set_baseline import calibrate_baseline_ear, calibrate_baseline_gaze
 
 # Step1 LLM 코칭 피드백 (선택적 — 키 없으면 자동 폴백)
 from step1_llm_feedback import generate_feedback
+
+# Step3 면접 질문 생성 (선택적 — 키 없으면 자동 폴백)
+from step3_interview_question import generate_question
 
 try:
     import whisper
@@ -671,8 +678,88 @@ def analyze_feedback():
     return jsonify({'feedback': text, 'source': 'llm' if text else 'template'})
 
 
+@app.route('/interview/next-question', methods=['POST'])
+def interview_next_question():
+    """Step 3 · 다음 면접 질문 생성.
+    body: {
+      "tier": "warmup" | "standard" | "practice",
+      "previous_questions": [str, ...],
+      "previous_answer": str (선택 — STT로 변환된 방금 답변 텍스트, 꼬리질문용)
+    }
+    """
+    data = request.get_json(silent=True) or {}
+    tier = data.get('tier', 'standard')
+    previous_questions = data.get('previous_questions', [])
+    previous_answer = data.get('previous_answer')
+
+    if tier not in ('warmup', 'standard', 'practice'):
+        return jsonify({'error': "tier는 'warmup' | 'standard' | 'practice' 중 하나여야 합니다"}), 400
+
+    question, source = generate_question(tier, previous_questions, previous_answer)
+    return jsonify({'question': question, 'source': source})
+
+
+@app.route('/interview/tts', methods=['POST'])
+def interview_tts():
+    """Step 3 · 질문 텍스트 → mp3 음성. body: { "text": "..." }"""
+    data = request.get_json(silent=True) or {}
+    text = data.get('text', '').strip()
+    if not text:
+        return jsonify({'error': 'text가 필요합니다'}), 400
+
+    audio_bytes = synthesize_speech(text)
+    if audio_bytes is None:
+        return jsonify({'error': 'TTS 생성 실패 (키 없음 또는 호출 오류)'}), 502
+
+    return Response(audio_bytes, mimetype='audio/mpeg')
+
+
+@app.route('/interview/transcribe', methods=['POST'])
+def interview_transcribe():
+    """Step 3 · 답변 영상 → 텍스트 변환 (Whisper 재사용).
+    꼬리질문 생성에 쓸 '방금 사용자가 뭐라고 답했는지'를 얻기 위함.
+    """
+    if 'file' not in request.files:
+        return jsonify({'error': '파일이 없습니다'}), 400
+
+    if not (WHISPER_AVAILABLE and whisper_model is not None):
+        # whisper 없는 환경 — 에러 대신 빈 텍스트로 응답 (꼬리질문 없이 진행되게)
+        return jsonify({'text': '', 'available': False})
+
+    video_file = request.files['file']
+    tmp_path = None
+    converted_path = None
+    try:
+        tmp_path = save_temp_video(video_file)
+        analysis_path = ensure_mp4(tmp_path)
+        if analysis_path != tmp_path:
+            converted_path = analysis_path
+
+        y16, _ = librosa.load(analysis_path, sr=16000, mono=True)
+        result = whisper_model.transcribe(y16, language="ko")
+        text = result.get("text", "").strip()
+
+        return jsonify({'text': text, 'available': True})
+
+    except Exception as e:
+        import traceback
+        print(f"[ERROR] transcribe 실패: {traceback.format_exc()}")
+        return jsonify({'error': str(e), 'text': '', 'available': False}), 500
+
+    finally:
+        for p in (tmp_path, converted_path):
+            if p and os.path.exists(p):
+                try:
+                    os.remove(p)
+                except:
+                    pass
+
+
 if __name__ == '__main__':
     load_models()
-    with app.app_context():
-        db.create_all()
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    try:
+        with app.app_context():
+            db.create_all()
+    except Exception as e:
+        print(f"[WARNING] DB 연결 실패, DB 없이 서버 실행: {e}")
+    app.run(host='0.0.0.0', port=5000, debug=True)
