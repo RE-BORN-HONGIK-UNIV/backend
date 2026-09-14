@@ -32,11 +32,14 @@ jobs:
       - run: pip install ruff
       - run: ruff check . --select=F  # 정의되지 않은 이름 등 확실한 오류만 (스타일 규칙 X)
 
-  test-step2:
-    # step2/ 순수 로직(scoring, blink, expression)만 테스트 — torch/whisper/mediapipe
-    # 불필요, numpy만 있으면 됨. gaze_analyzer(cv2)·app.py(torch/whisper)는 CI 대상 아님
-    # — 이유는 DB_DESIGN.md / 이전 대화 참고 (실제 학습 모델 파일이 레포에 없어 의미있게
-    # 테스트 불가, whisper는 모델을 런타임에 다운로드해야 해서 매 push마다 느려짐).
+  test-pure-logic:
+    # 순수 로직(step1/2/3의 임계값 비교·집계·프롬프트 조립)만 테스트 — torch/whisper/
+    # mediapipe 불필요. numpy + opencv-headless만 있으면 됨(gaze_analyzer가 cv2를 모듈
+    # 최상단에서 import하지만 테스트 대상 함수 자체는 순수 수학이라 opencv-headless로 충분).
+    # app.py(torch/whisper 로드)는 여전히 CI 대상 아님 — 이유는 DB_DESIGN.md / 이전 대화
+    # 참고 (실제 학습 모델 파일이 레포에 없어 의미있게 테스트 불가, whisper는 모델을
+    # 런타임에 다운로드해야 해서 매 push마다 느려짐). API 통합 테스트 구조는
+    # docs/TESTING.md 참고.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,5 +48,8 @@ jobs:
           python-version: "3.11"
           # cache: pip 안 씀 — requirements.txt/pyproject.toml이 레포에 없어서
           # 캐시 키를 못 잡고 setup-python 자체가 에러로 죽음 (실제로 한 번 겪음)
-      - run: pip install numpy pytest
-      - run: pytest tests/test_scoring.py tests/test_blink_analyzer.py tests/test_expression_analyzer.py -v
+      - run: pip install numpy opencv-python-headless pytest
+      - run: >
+          pytest tests/test_scoring.py tests/test_blink_analyzer.py
+          tests/test_expression_analyzer.py tests/test_gaze_analyzer.py
+          tests/test_interview_question.py tests/test_llm_feedback.py -v
