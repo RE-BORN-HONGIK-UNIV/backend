@@ -1,0 +1,31 @@
+# torch/torchvision을 CPU-only 빌드로 받기 위한 추가 인덱스 — 기본 PyPI엔 CUDA
+# 포함 버전만 있어서 이거 없으면 수GB짜리 GPU 빌드가 받아짐 (배포 환경엔 GPU 없음)
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+Flask==3.0.3
+Flask-Cors==4.0.1
+Flask-SQLAlchemy==3.1.1
+PyMySQL==1.1.1
+Werkzeug==3.0.3
+PyJWT==2.9.0
+python-dotenv==1.0.1
+
+numpy==1.26.4
+Pillow==10.4.0
+
+# step1 — 음성(채움말/멈춤/CNN)
+librosa==0.10.2.post1
+torch==2.4.1+cpu
+torchvision==0.19.1+cpu
+openai-whisper==20250625
+
+# step1/step3 — LLM 코칭 피드백·면접 질문 생성 (선택, 키 없으면 자동 폴백)
+anthropic==0.69.0
+
+# step2 — 표정·시선 (mediapipe가 opencv-python-headless와만 호환, GUI용 opencv-python과
+# 같이 깔면 충돌하니 절대 opencv-python을 따로 추가하지 말 것)
+opencv-python-headless==4.10.0.84
+mediapipe==0.10.14
+
+# app.py의 파형 시각화(matplotlib.use('Agg'))
+matplotlib==3.9.2

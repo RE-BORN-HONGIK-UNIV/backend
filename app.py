@@ -29,9 +29,12 @@ from flask_cors import CORS
 from PIL import Image
 from step3.tts import synthesize_speech
 
-import torch
-import torch.nn as nn
-import torchvision.transforms as transforms
+# torch/torchvision, whisper, step2의 mediapipe·cv2 기반 모듈(landmark_face_points,
+# gaze_analyzer)은 여기서 import하지 않고 실제로 쓰는 함수 안에서 지연 import한다.
+# 이유: 이것들만으로도 수백MB가 프로세스 메모리에 항상 올라가는데, /health·로그인·
+# 커뮤니티처럼 이 라이브러리가 전혀 필요 없는 라우트도 같은 워커에서 뜨기 때문에,
+# 모듈 최상단에서 import하면 그 라우트만 받는 워커도 무조건 이 비용을 낸다
+# (배포 환경 메모리 제한 때문에 2026-09 경량화 작업으로 옮김. _init_torch()/load_models() 참고).
 
 try:
     from dotenv import load_dotenv
@@ -39,16 +42,13 @@ try:
 except ImportError:
     pass
 
-# Step2 시선/깜빡임 모듈 import
-from step2.landmark_face_points import (
-    extract_landmarks_from_video, LEFT_EYE_EAR_IDX, RIGHT_EYE_EAR_IDX,
-    POSE_LANDMARK_IDX, LEFT_IRIS_IDX, RIGHT_IRIS_IDX,
-)
+# Step2 시선/깜빡임 모듈 import — blink_analyzer/expression_analyzer/scoring/set_baseline은
+# numpy만 써서 가벼우니 그대로 상단에 둠. mediapipe/cv2가 필요한 landmark_face_points·
+# gaze_analyzer는 analyze_gaze_blink() 안에서 지연 import.
 from step2.blink_analyzer import (
     compute_ear_series, detect_blinks,
     compute_blink_blendshape_series, detect_blinks_from_blendshape,
 )
-from step2.gaze_analyzer import detect_gaze_segments
 from step2.expression_analyzer import compute_expression_series, summarize_expression, detect_expression_segments
 from step2.scoring import score_blink_rate, score_gaze_segments, score_expression
 from step2.set_baseline import calibrate_baseline_ear, calibrate_baseline_gaze
@@ -59,12 +59,11 @@ from step1.llm_feedback import generate_feedback
 # Step3 면접 질문 생성 (선택적 — 키 없으면 자동 폴백)
 from step3.interview_question import generate_question
 
-try:
-    import whisper
-    WHISPER_AVAILABLE = True
-except ImportError:
-    WHISPER_AVAILABLE = False
-    print("[WARNING] whisper 없음 - 발화 유창성 0점 고정")
+# whisper 모듈 자체는 load_models() 안에서 지연 import. 그 전까지는 "아직 모른다"가
+# 아니라 "안 붙어있다"로 취급 — analyze_filler()/interview_transcribe()가 load_models()
+# 호출 전에 이 값을 참조할 일은 없지만(두 라우트 모두 진입 시점에 load_models()를 먼저
+# 부름), 혹시 몰라 안전한 기본값으로 초기화해둔다.
+WHISPER_AVAILABLE = False
 
 def _require_env(key):
     """비밀번호/서명키처럼 코드에 하드코딩하면 안 되는 값 — .env 또는 환경변수로 필수 주입.
@@ -197,55 +196,83 @@ FILLER_MIN_DURATION = 0.1
 FILLER_MAX_DURATION = 0.8
 
 # ── CNN 모델 구조 ────────────────────────────────────────────────────
-class SpeechAnxietyCNN(nn.Module):
-    def __init__(self, dropout=0.5, size='large'):
-        super(SpeechAnxietyCNN, self).__init__()
-        sizes = {
-            'small':  [32, 64, 128],
-            'medium': [64, 128, 256],
-            'large':  [128, 256, 512]
-        }
-        filters = sizes[size]
-        self.features = nn.Sequential(
-            nn.Conv2d(3, filters[0], kernel_size=3, padding=1),
-            nn.BatchNorm2d(filters[0]),
-            nn.ReLU(),
-            nn.MaxPool2d(2, 2),
-            nn.Conv2d(filters[0], filters[1], kernel_size=3, padding=1),
-            nn.BatchNorm2d(filters[1]),
-            nn.ReLU(),
-            nn.MaxPool2d(2, 2),
-            nn.Conv2d(filters[1], filters[2], kernel_size=3, padding=1),
-            nn.BatchNorm2d(filters[2]),
-            nn.ReLU(),
-            nn.MaxPool2d(2, 2),
-        )
-        self.gap = nn.AdaptiveAvgPool2d(1)
-        self.classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(filters[2], 256),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(256, 3)
-        )
+# torch/torchvision은 _init_torch()가 처음 호출될 때만 import한다 (모듈 상단 import
+# 제거 사유는 파일 상단 주석 참고). SpeechAnxietyCNN/transform은 그 전까지 None이고,
+# load_models()가 항상 _init_torch()를 먼저 불러서 채워준다.
+SpeechAnxietyCNN = None
+transform = None
 
-    def forward(self, x):
-        x = self.features(x)
-        x = self.gap(x)
-        x = self.classifier(x)
-        return x
+def _init_torch():
+    """torch/torchvision을 최초 1회만 import하고 CNN 클래스·전처리 파이프라인을 준비."""
+    global torch, SpeechAnxietyCNN, transform
+    if SpeechAnxietyCNN is not None:
+        return
+    import torch
+    import torch.nn as nn
+    import torchvision.transforms as transforms
 
-transform = transforms.Compose([
-    transforms.Resize((IMG_SIZE, IMG_SIZE)),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-])
+    class _SpeechAnxietyCNN(nn.Module):
+        def __init__(self, dropout=0.5, size='large'):
+            super(_SpeechAnxietyCNN, self).__init__()
+            sizes = {
+                'small':  [32, 64, 128],
+                'medium': [64, 128, 256],
+                'large':  [128, 256, 512]
+            }
+            filters = sizes[size]
+            self.features = nn.Sequential(
+                nn.Conv2d(3, filters[0], kernel_size=3, padding=1),
+                nn.BatchNorm2d(filters[0]),
+                nn.ReLU(),
+                nn.MaxPool2d(2, 2),
+                nn.Conv2d(filters[0], filters[1], kernel_size=3, padding=1),
+                nn.BatchNorm2d(filters[1]),
+                nn.ReLU(),
+                nn.MaxPool2d(2, 2),
+                nn.Conv2d(filters[1], filters[2], kernel_size=3, padding=1),
+                nn.BatchNorm2d(filters[2]),
+                nn.ReLU(),
+                nn.MaxPool2d(2, 2),
+            )
+            self.gap = nn.AdaptiveAvgPool2d(1)
+            self.classifier = nn.Sequential(
+                nn.Flatten(),
+                nn.Linear(filters[2], 256),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(256, 3)
+            )
+
+        def forward(self, x):
+            x = self.features(x)
+            x = self.gap(x)
+            x = self.classifier(x)
+            return x
+
+    SpeechAnxietyCNN = _SpeechAnxietyCNN
+    transform = transforms.Compose([
+        transforms.Resize((IMG_SIZE, IMG_SIZE)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+    ])
 
 cnn_model = None
 whisper_model = None
+_models_loaded = False
 
 def load_models():
-    global cnn_model, whisper_model
+    """CNN/Whisper 모델 로드 — 최초 요청 시점에 한 번만 실행되는 지연 로딩.
+    예전엔 `if __name__ == '__main__':` 블록에서만 불려서, gunicorn 등 WSGI 서버로
+    띄우면(배포 환경이 이 방식) 이 함수 자체가 한 번도 안 불리고 모델이 영영 None으로
+    남는 버그가 있었다 — /analyze, /interview/transcribe 라우트 진입 시 직접 호출하는
+    방식으로 바꿔서 실행 방식(개발 서버/gunicorn 등)과 무관하게 항상 동작하게 했다."""
+    global cnn_model, whisper_model, WHISPER_AVAILABLE, _models_loaded
+    if _models_loaded:
+        return
+    _models_loaded = True
+
+    _init_torch()
+
     if os.path.exists(MODEL_PATH):
         try:
             m = SpeechAnxietyCNN(dropout=0.5, size='large')
@@ -257,6 +284,13 @@ def load_models():
             print(f"[ERROR] CNN 모델 로드 실패: {e}")
     else:
         print(f"[WARNING] CNN 모델 파일 없음: {MODEL_PATH}")
+
+    try:
+        import whisper
+        WHISPER_AVAILABLE = True
+    except ImportError:
+        WHISPER_AVAILABLE = False
+        print("[WARNING] whisper 없음 - 발화 유창성 0점 고정")
 
     if WHISPER_AVAILABLE:
         try:
@@ -600,6 +634,8 @@ def health():
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
+    load_models()  # 최초 호출 시에만 실제로 torch/whisper를 로드 (이후엔 즉시 리턴)
+
     if 'file' not in request.files:
         return jsonify({'error': '파일이 없습니다'}), 400
 
@@ -685,6 +721,15 @@ def analyze():
 # ▼▼▼ [추가] Step2 시선/깜빡임 분석 라우트 ▼▼▼
 @app.route('/analyze/gaze-blink', methods=['POST'])
 def analyze_gaze_blink():
+    # mediapipe/cv2는 이 라우트에서만 필요해서 여기서 지연 import (모듈 상단 import를
+    # 뺀 이유는 파일 상단 주석 참고) — /health·로그인·커뮤니티 라우트만 받는 워커는
+    # 이 라우트가 한 번도 안 불리면 mediapipe/cv2를 아예 메모리에 안 올린다.
+    from step2.landmark_face_points import (
+        extract_landmarks_from_video, LEFT_EYE_EAR_IDX, RIGHT_EYE_EAR_IDX,
+        POSE_LANDMARK_IDX, LEFT_IRIS_IDX, RIGHT_IRIS_IDX,
+    )
+    from step2.gaze_analyzer import detect_gaze_segments
+
     user = get_current_user()
     if user is None:
         return jsonify({'error': '로그인이 필요합니다'}), 401
@@ -935,6 +980,8 @@ def interview_transcribe():
     """Step 3 · 답변 영상 → 텍스트 변환 (Whisper 재사용).
     꼬리질문 생성에 쓸 '방금 사용자가 뭐라고 답했는지'를 얻기 위함.
     """
+    load_models()  # 최초 호출 시에만 실제로 torch/whisper를 로드 (이후엔 즉시 리턴)
+
     if 'file' not in request.files:
         return jsonify({'error': '파일이 없습니다'}), 400
 

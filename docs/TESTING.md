@@ -24,33 +24,37 @@
 - 지금 상태: 미소·긴장·시선 임계값 1차 검증 완료(48프레임·3인), 표본 확대·iris_thresh 검증은 진행 중 — 자세한 내용은 ACCURACY_NOTES.md 참고
 - **주의**: 1층 테스트를 통과한다고 2층이 검증되는 게 아니다. 반대로 2층에서 임계값을 바꾸면(예: 0.4→0.3) 1층 테스트가 그 값을 하드코딩해서 검증하고 있진 않은지 확인 필요(현재 1층 테스트들은 임계값을 인자로 넘기거나 별도 상수로 검증해서 이 문제는 없음)
 
-## 3층 — API/통합 테스트 (아직 없음 — 구조적 결정 필요)
+## 3층 — API/통합 테스트 (아직 없음 — 이제는 구조적 블로커는 해소됨)
 
 **질문**: "요청이 라우트→DB→응답까지 올바르게 흐르는가?" (`/api/signup`, `/community/posts` 등)
 
-아직 안 만든 이유는 우선순위 문제가 아니라 **`app.py`의 import 구조 때문**:
+전에는 `app.py` 최상단에 `import torch`/`torchvision.transforms`/`whisper`/
+`step2.landmark_face_points`(mediapipe, cv2)가 있어서, `app.test_client()`로
+`/api/signup`처럼 DB만 건드리는 라우트 하나를 테스트하려 해도 모듈 import
+시점에 이 전부가 로드됐다.
 
-```python
-import torch
-import torchvision.transforms as transforms
-...
-from step2.landmark_face_points import extract_landmarks_from_video  # mediapipe, cv2
-...
-import whisper
-```
+**2026-09 경량화 작업(배포 환경 메모리 제한 대응)으로 이 구조를 이미 바꿨다** —
+torch/torchvision은 `_init_torch()`(CNN 클래스 정의 포함), whisper는
+`load_models()`, mediapipe/cv2 기반 `step2.landmark_face_points`·
+`step2.gaze_analyzer`는 `analyze_gaze_blink()` 함수 안에서 각각 지연
+import하도록 옮겼다. 동시에 `load_models()`가 `if __name__ == '__main__':`
+블록이 아니라 `/analyze`·`/interview/transcribe` 라우트 진입 시 직접 호출되도록
+바꿔서, gunicorn 등 WSGI 서버로 띄워도(이전엔 이 경로에선 `load_models()`가
+한 번도 안 불려서 모델이 영영 None으로 남는 버그가 있었음) 첫 요청에서 제대로
+로드된다. 프로덕션 동작은 이전과 동일(Python이 import를 캐싱하므로 라우트별
+첫 호출 이후 비용은 같음) — 메모리 사용 시점과 테스트 용이성만 좋아졌다.
 
-이게 전부 파일 최상단에 있어서, `app.test_client()`로 `/api/signup`처럼 DB만
-건드리는 라우트 하나를 테스트하려 해도 **모듈 import 시점에 torch/whisper/
-mediapipe가 전부 로드**된다. 선택지는 두 가지:
+즉 `docs/TESTING.md` 이전 버전이 "(B) lazy-import 리팩터링"으로 불렀던 선택지가
+이미 적용된 상태. 남은 건 이 위에 3층 테스트를 실제로 쌓는 것뿐 —
+`/health`·`/api/signup`·`/api/login`·`/community/posts` 같은 라우트는
+`app.test_client()`로 torch/whisper/mediapipe 없이 바로 테스트 가능.
 
-- **(A) CI에 무거운 의존성을 다 설치** — torch/whisper 설치만 몇 분, 매 push마다 느려짐. `requirements.txt`가 아직 없는 것도(오늘 할 일 목록) 이 판단을 더 늦추고 있음.
-- **(B) 무거운 import를 라우트 함수 안으로 lazy-import 리팩터링** — `/analyze`, `/analyze/gaze-blink`처럼 실제로 ML을 쓰는 라우트만 함수 내부에서 `import torch` 하도록 옮기면, `/api/signup`·`/health`·`/community/posts` 같은 라우트는 무거운 의존성 없이 빠르게 테스트 가능. 프로덕션 동작은 안 바뀌고(Python은 import를 캐싱하므로 첫 호출 이후 비용 동일) 테스트 용이성만 좋아짐 — 일반적으로 권장되는 패턴이지만 `app.py` 구조를 건드리는 리팩터링이라 별도 작업으로 진행 필요.
-
-**권장**: (B)를 먼저 하고 나서 3층을 얇게(인증/DB CRUD 라우트 위주) 시작하는 것.
-당장은 결정만 기록해두고, 팀 논의 후 착수.
+**권장**: 인증/DB CRUD 라우트 위주로 3층을 얇게 시작. CI에 무거운 의존성을
+설치할 필요는 이제 없음(`requirements.txt`의 torch/whisper/mediapipe는
+1층·3층 CI에서 여전히 불필요).
 
 ## 검증 안 된 것 요약 (발표 Q&A 대비)
 
 - 2층: 표본이 아직 작음(48프레임·3인, 라벨러 1인) — ACCURACY_NOTES.md "다음 액션" 참고
-- 3층: 전무. app.py 리팩터링 여부 결정 전까지는 수동 테스트(Postman 등)에 의존
+- 3층: 전무(구조적 블로커는 해소됐지만 테스트 자체는 아직 안 씀) — 지금은 수동 테스트(Postman 등)에 의존
 - 프론트엔드: 별도 `frontend/docs`(또는 README) 참고 — 이 문서는 backend 레포 기준

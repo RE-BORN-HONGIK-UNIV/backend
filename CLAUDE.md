@@ -53,10 +53,12 @@ python app.py
    표본이 한쪽으로 치우쳤으면(예: 특정 인물 1명이 라벨 대부분을 차지) 근거 부족으로 보류하고
    그 이유를 문서에 남긴다 (`step2/ACCURACY_NOTES.md`의 긴장 임계값 사례 참고).
 
-3. **API/통합 테스트** — 아직 없음. `app.py`가 torch/whisper/mediapipe를 파일 최상단에서
-   import해서, Flask test client로 가벼운 라우트(`/health`, `/api/signup` 등)만 테스트하려
-   해도 무거운 의존성이 다 로드됨. 착수 전에 라우트 함수 내부로 lazy-import 리팩터링할지
-   팀 결정 필요 — `docs/TESTING.md` 참고.
+3. **API/통합 테스트** — 아직 없음. 예전엔 `app.py`가 torch/whisper/mediapipe를 파일
+   최상단에서 import해서 이게 구조적으로 막혀 있었는데, 2026-09 경량화 작업(배포 환경
+   메모리 제한 대응)으로 전부 라우트 함수 안 lazy-import로 옮겨서(`_init_torch()`,
+   `load_models()`, `analyze_gaze_blink()` 참고) 이제 Flask test client로 `/health`,
+   `/api/signup` 같은 가벼운 라우트만 무거운 의존성 없이 테스트할 수 있음. 남은 건
+   테스트를 실제로 쌓는 것 — `docs/TESTING.md` 참고.
 
 ## 트러블슈팅 기록
 
