@@ -282,10 +282,12 @@ def load_models():
         return
     _models_loaded = True
 
-    _init_torch()
-
     if os.path.exists(MODEL_PATH):
         try:
+            _init_torch()  # CNN 가중치 파일이 실제로 있을 때만 torch를 메모리에 올림 —
+            # 지금처럼 파일이 없으면(데모 모드) /analyze를 아무리 호출해도 torch 자체가
+            # 로드되지 않는다 (2026-09 경량화 후속: 순서 뒤집기 전엔 데모 모드에서도
+            # 매번 쓸데없이 torch 전체를 import하고 있었음).
             m = SpeechAnxietyCNN(dropout=0.5, size='large')
             m.load_state_dict(torch.load(MODEL_PATH, map_location='cpu'))
             m.eval()
