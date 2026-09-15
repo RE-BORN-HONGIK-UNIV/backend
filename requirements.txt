@@ -5,10 +5,11 @@
 Flask==3.0.3
 Flask-Cors==4.0.1
 Flask-SQLAlchemy==3.1.1
-PyMySQL==1.1.1
+psycopg2-binary==2.9.9
 Werkzeug==3.0.3
 PyJWT==2.9.0
 python-dotenv==1.0.1
+gunicorn==23.0.0
 
 numpy==1.26.4
 Pillow==10.4.0
@@ -21,6 +22,10 @@ openai-whisper==20250625
 
 # step1/step3 — LLM 코칭 피드백·면접 질문 생성 (선택, 키 없으면 자동 폴백)
 anthropic==0.69.0
+
+# step3 — 면접 질문 TTS (선택, 키 없으면 자동 폴백 — step3/tts.py가 ImportError도
+# 이미 감싸고 있어서 이 패키지가 없어도 서버는 뜨지만, 실제 TTS 기능을 쓰려면 필요)
+elevenlabs==1.9.0
 
 # step2 — 표정·시선 (mediapipe가 opencv-python-headless와만 호환, GUI용 opencv-python과
 # 같이 깔면 충돌하니 절대 opencv-python을 따로 추가하지 말 것)

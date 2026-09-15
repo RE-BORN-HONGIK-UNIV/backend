@@ -177,6 +177,17 @@ def get_current_user():
         return None
     return User.query.get(payload.get('user_id'))
 
+
+# 테이블 생성 — 예전엔 `if __name__ == '__main__':` 블록에서만 호출돼서, gunicorn
+# 같은 WSGI 서버로 띄우면(배포 시 쓰는 방식) 이 코드가 한 번도 안 돌고 테이블이
+# 영영 안 생겨서 모든 DB 라우트가 깨지는 문제가 있었다 — 모듈 로드 시점(워커 프로세스
+# 시작 시 1회)에 바로 실행하도록 옮김. DB 연결 실패 시에도 앱 자체는 뜨게 폴백.
+try:
+    with app.app_context():
+        db.create_all()
+except Exception as e:
+    print(f"[WARNING] DB 연결 실패, DB 없이 서버 실행: {e}")
+
 MODEL_PATH = os.environ.get("MODEL_PATH", "best_size_large.pth")
 PAUSE_THRESHOLD = 1.2
 
@@ -1019,10 +1030,5 @@ def interview_transcribe():
 
 
 if __name__ == '__main__':
-    load_models()
-    try:
-        with app.app_context():
-            db.create_all()
-    except Exception as e:
-        print(f"[WARNING] DB 연결 실패, DB 없이 서버 실행: {e}")
+    load_models()  # db.create_all()은 이제 모듈 로드 시점에 이미 실행됨
     app.run(host='0.0.0.0', port=5000, debug=True)
