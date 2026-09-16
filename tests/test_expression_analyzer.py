@@ -3,7 +3,37 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from step2.expression_analyzer import detect_expression_segments, summarize_expression
+from step2.expression_analyzer import (
+    compute_expression_series,
+    detect_expression_segments,
+    summarize_expression,
+)
+
+
+def test_compute_expression_series_gates_moderate_smile_when_jaw_open():
+    # jawOpen이 게이트를 넘고, 미소 점수도 고득점 예외(0.5) 미만 — 게이팅으로 0점 처리
+    frames = [{"t": 0.0, "blendshapes": {
+        "mouthSmileLeft": 0.3, "mouthSmileRight": 0.3, "jawOpen": 0.2,
+    }}]
+    series = compute_expression_series(frames)
+    assert series[0][1] == 0.0
+
+
+def test_compute_expression_series_bypasses_gate_for_high_confidence_smile():
+    # 2026-09-16 재검증: 원본 미소 점수가 확실히 높으면(>=0.5) jawOpen과 무관하게 통과
+    frames = [{"t": 0.0, "blendshapes": {
+        "mouthSmileLeft": 0.6, "mouthSmileRight": 0.6, "jawOpen": 0.3,
+    }}]
+    series = compute_expression_series(frames)
+    assert series[0][1] == 0.6
+
+
+def test_compute_expression_series_keeps_smile_when_jaw_closed():
+    frames = [{"t": 0.0, "blendshapes": {
+        "mouthSmileLeft": 0.2, "mouthSmileRight": 0.2, "jawOpen": 0.01,
+    }}]
+    series = compute_expression_series(frames)
+    assert series[0][1] == 0.2
 
 
 def test_summarize_expression_empty_series():

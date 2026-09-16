@@ -22,6 +22,16 @@ TENSION_THRESHOLD = 0.4
 # 표본이 작아 엄밀한 최적값은 아니고, "일단 훨씬 나아짐" 수준의 잠정치.
 JAW_OPEN_GATE = 0.05
 
+# 2026-09-16 재검증(4~6번째 인물, 영상 3개·45프레임, ACCURACY_NOTES.md "2차 검증"
+# 참고)에서 발견: JAW_OPEN_GATE가 "말하며 지속적으로 웃는" 화법에서 진짜 미소까지
+# 대량으로 지워버려 recall이 크게 떨어지는 케이스가 있었음(영상 하나는 recall 0%,
+# 다른 하나는 16.7%). mouthSmile 원본 점수가 이 값 이상이면 jawOpen 게이팅을
+# 건너뛰도록 예외를 추가 — "말하기"로 인한 mouthSmile 오반응은 이 정도로 높게
+# 나오는 경우가 드물다는 걸 실측으로 확인함(3영상 합산: 정확도 64.4%→80%,
+# recall 15.8%→68.4%, precision 100%→81.2%). 이 값도 3영상·45프레임 기준
+# 최적 구간(0.45~0.5)의 잠정치이지 확정 최적값은 아님 — 표본이 더 쌓이면 재검증.
+SMILE_HIGH_CONFIDENCE_BYPASS = 0.5
+
 
 def _avg(blendshapes, keys):
     vals = [blendshapes.get(k, 0.0) for k in keys]
@@ -31,14 +41,21 @@ def _avg(blendshapes, keys):
 def compute_expression_series(frames):
     """프레임 리스트 → 시간별 (t, smile_score, tension_score) 리스트.
     얼굴 미검출 프레임은 (t, None, None). 입을 벌린(말하는) 순간의 미소 오탐을
-    줄이기 위해 jawOpen이 JAW_OPEN_GATE를 넘으면 그 프레임의 미소 점수는 0으로 본다."""
+    줄이기 위해 jawOpen이 JAW_OPEN_GATE를 넘으면 그 프레임의 미소 점수는 0으로
+    본다 — 단, 원본 미소 점수가 SMILE_HIGH_CONFIDENCE_BYPASS 이상으로 확실히
+    높으면 "말하며 웃는" 진짜 미소일 가능성이 커서 게이팅을 건너뛴다."""
     series = []
     for f in frames:
         bs = f.get("blendshapes")
         if bs is None:
             series.append((f["t"], None, None))
             continue
-        smile = 0.0 if bs.get(JAW_OPEN_KEY, 0.0) > JAW_OPEN_GATE else _avg(bs, SMILE_KEYS)
+        smile_raw = _avg(bs, SMILE_KEYS)
+        jaw_open = bs.get(JAW_OPEN_KEY, 0.0)
+        if smile_raw >= SMILE_HIGH_CONFIDENCE_BYPASS or jaw_open <= JAW_OPEN_GATE:
+            smile = smile_raw
+        else:
+            smile = 0.0
         series.append((f["t"], smile, _avg(bs, TENSION_KEYS)))
     return series
 
