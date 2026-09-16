@@ -19,6 +19,7 @@ import cv2
 
 from step2.expression_analyzer import SMILE_KEYS, TENSION_KEYS, JAW_OPEN_KEY
 from step2.landmark_face_points import extract_landmarks_from_video
+from step2.smile_cascade import detect_smile_in_frame
 
 SAMPLE_INTERVAL_SEC = 1.0
 
@@ -61,6 +62,11 @@ def main(video_path, output_dir="label_candidates"):
             # 2026-09-16 미소 미검출 재조사(ACCURACY_NOTES.md "2차 검증") 때 이 컬럼이
             # 없어서 매번 별도 스크립트를 급조해야 했음
             "jaw_open_score": round(bs.get(JAW_OPEN_KEY, 0.0), 4) if bs else "",
+            # blendshape와 별개 신호(Haar Cascade, step2/smile_cascade.py) — 2026-09-16
+            # "2차 검증" 대안 후보, min_neighbors=6/10/15 세 값으로 같이 뽑아서 비교 가능하게
+            "smile_haar_n6": detect_smile_in_frame(img, min_neighbors=6),
+            "smile_haar_n10": detect_smile_in_frame(img, min_neighbors=10),
+            "smile_haar_n15": detect_smile_in_frame(img, min_neighbors=15),
             "label_smile": "",    # 이미지 보고 웃는 게 맞으면 1, 아니면 0
             "label_tension": "",  # 긴장한 표정이 맞으면 1, 아니면 0
             "label_blink": "",    # 눈 감는 중이면 1, 아니면 0

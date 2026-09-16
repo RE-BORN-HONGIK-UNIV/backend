@@ -18,6 +18,7 @@ app.py          Flask 라우트 전체 (인증, /analyze*, /community/*, /interv
 step1/          음성 분석 — analyze_filler_final.py(채움말), inference_cnn_final.py(CNN),
                 llm_feedback.py(코칭 피드백 생성, 순수 함수는 _user_prompt)
 step2/          표정·시선 — *_analyzer.py(blink/gaze/expression), scoring.py, set_baseline.py
+                smile_cascade.py — OpenCV Haar Cascade 미소 검출(대안 후보, 아직 프로덕션 미통합)
                 ACCURACY_NOTES.md — 임계값 근거·검증 이력 (문헌 인용 + 실측 검증)
 step3/          면접 질문(interview_question.py) · TTS(tts.py)
 tests/          유닛테스트(pytest) + tests/labeling/(정확도 검증 하네스, 수동)

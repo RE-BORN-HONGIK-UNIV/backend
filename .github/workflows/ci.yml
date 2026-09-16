@@ -52,4 +52,5 @@ jobs:
       - run: >
           pytest tests/test_scoring.py tests/test_blink_analyzer.py
           tests/test_expression_analyzer.py tests/test_gaze_analyzer.py
-          tests/test_interview_question.py tests/test_llm_feedback.py -v
+          tests/test_interview_question.py tests/test_llm_feedback.py
+          tests/test_smile_cascade.py -v
