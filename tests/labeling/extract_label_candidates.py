@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 import cv2
 
-from step2.expression_analyzer import SMILE_KEYS, TENSION_KEYS
+from step2.expression_analyzer import SMILE_KEYS, TENSION_KEYS, JAW_OPEN_KEY
 from step2.landmark_face_points import extract_landmarks_from_video
 
 SAMPLE_INTERVAL_SEC = 1.0
@@ -57,6 +57,10 @@ def main(video_path, output_dir="label_candidates"):
             "smile_score": round(_avg(bs, SMILE_KEYS), 4) if bs else "",
             "tension_score": round(_avg(bs, TENSION_KEYS), 4) if bs else "",
             "blink_score": round((bs.get("eyeBlinkLeft", 0.0) + bs.get("eyeBlinkRight", 0.0)) / 2, 4) if bs else "",
+            # jawOpen 게이팅이 미소를 잘못 지우는 경우를 따로 진단할 수 있게 —
+            # 2026-09-16 미소 미검출 재조사(ACCURACY_NOTES.md "2차 검증") 때 이 컬럼이
+            # 없어서 매번 별도 스크립트를 급조해야 했음
+            "jaw_open_score": round(bs.get(JAW_OPEN_KEY, 0.0), 4) if bs else "",
             "label_smile": "",    # 이미지 보고 웃는 게 맞으면 1, 아니면 0
             "label_tension": "",  # 긴장한 표정이 맞으면 1, 아니면 0
             "label_blink": "",    # 눈 감는 중이면 1, 아니면 0
