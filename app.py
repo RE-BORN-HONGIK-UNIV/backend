@@ -53,6 +53,10 @@ from step2.expression_analyzer import compute_expression_series, summarize_expre
 from step2.scoring import score_blink_rate, score_gaze_segments, score_expression
 from step2.set_baseline import calibrate_baseline_ear, calibrate_baseline_gaze
 
+
+# Step1 채움말 분석 (librosa 소리구간 + Whisper word timestamp 결합)
+from step1.analyze_filler_final import analyze_filler
+
 # Step1 LLM 코칭 피드백 (선택적 — 키 없으면 자동 폴백)
 from step1.llm_feedback import generate_feedback
 
@@ -202,9 +206,6 @@ IMG_SIZE = 224
 WINDOW_SEC = 3.0
 STRIDE_SEC = 1.0
 
-# ── 채움말 판정 설정 (analyze_filler_final.py 동일) ─────────────────
-FILLER_MIN_DURATION = 0.1
-FILLER_MAX_DURATION = 0.8
 
 # ── CNN 모델 구조 ────────────────────────────────────────────────────
 # torch/torchvision은 _init_torch()가 처음 호출될 때만 import한다 (모듈 상단 import
@@ -484,63 +485,7 @@ def predict_cnn(audio_path):
     print(f"[CNN] 윈도우 수: {len(chunks)}, 확률: {result}")
     return {**result, **scores, 'window_count': len(chunks)}
 
-# ── 채움말 분석 (librosa 소리구간 + Whisper word timestamp) ─────────
-def analyze_filler(audio_path):
-    try:
-        # 1) librosa로 소리 구간 탐지
-        y, sr = librosa.load(audio_path, sr=None)
-        total_duration = librosa.get_duration(y=y, sr=sr)
 
-        sound_segments = librosa.effects.split(y, top_db=30)
-        sound_segments_sec = [(start / sr, end / sr) for start, end in sound_segments]
-
-        # 2) Whisper word timestamp (ffmpeg 없이 numpy 배열로 직접 전달)
-        word_segments = []
-        if WHISPER_AVAILABLE and whisper_model is not None:
-            y16, _ = librosa.load(audio_path, sr=16000, mono=True)
-            result = whisper_model.transcribe(y16, language="ko", word_timestamps=True)
-            for segment in result["segments"]:
-                for word_info in segment.get("words", []):
-                    word_segments.append((word_info["start"], word_info["end"]))
-
-        # 3) 채움말 후보 판정
-        filler_count = 0
-        for seg_start, seg_end in sound_segments_sec:
-            seg_duration = seg_end - seg_start
-            if not (FILLER_MIN_DURATION <= seg_duration <= FILLER_MAX_DURATION):
-                continue
-
-            overlap_found = False
-            for word_start, word_end in word_segments:
-                overlap = min(seg_end, word_end) - max(seg_start, word_start)
-                if overlap > 0 and overlap / seg_duration >= 0.5:
-                    overlap_found = True
-                    break
-
-            if not overlap_found:
-                filler_count += 1
-
-        # 4) 점수 환산
-        sound_segment_count = len(sound_segments_sec)
-        filler_ratio = filler_count / sound_segment_count if sound_segment_count > 0 else 0
-        fluency_score = round(max(0, min(100, 100 * (1 - filler_ratio))), 1)
-
-        print(f"[Filler] 소리구간:{sound_segment_count}, 채움말:{filler_count}, 비율:{filler_ratio}")
-
-        return {
-            "total_duration_sec":   round(total_duration, 2),
-            "sound_segment_count":  sound_segment_count,
-            "filler_count":         filler_count,
-            "filler_ratio":         round(filler_ratio, 4),
-            "fluency_score":        fluency_score,
-        }
-    except Exception:
-        import traceback
-        print(f"[ERROR] filler 분석 실패: {traceback.format_exc()}")
-        return {
-            "total_duration_sec": 0, "sound_segment_count": 0,
-            "filler_count": 0, "filler_ratio": 0, "fluency_score": 0,
-        }
 
 # ── 멈춤 분석 (analyze_pause.py 동일) ───────────────────────────────
 def analyze_pause(audio_path):
@@ -678,7 +623,7 @@ def analyze():
             window_count = 0
 
         # 2) 채움말 (librosa + Whisper) → 발화 유창성
-        filler_result = analyze_filler(tmp_path)
+        filler_result = analyze_filler(tmp_path, whisper_model=whisper_model)
         fluency = filler_result['fluency_score']
 
         # 3) 멈춤 (librosa) → 침묵 조절력
