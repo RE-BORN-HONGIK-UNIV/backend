@@ -54,8 +54,20 @@ def main(csv_path):
     with open(csv_path, encoding="utf-8") as fh:
         rows = list(csv.DictReader(fh))
 
-    report(rows, "미소", "smile_score", "label_smile", 0.35)
-    report(rows, "긴장", "tension_score", "label_tension", 0.4)
+    # 2026-09-18(6차 검증): smile_score_app/tension_score_app이 앱이 실제로 쓰는 값
+    # (게이팅·바이패스·baseline 보정 전부 반영) — extract_label_candidates.py
+    # 갱신판(compute_expression_series 직접 호출)으로 생성한 CSV라면 이 컬럼이 있음.
+    # 구버전 CSV(smile_score/tension_score만 있는 raw 값)와의 하위호환을 위해
+    # 컬럼이 없으면 raw 쪽으로 폴백해서 리포트한다.
+    if rows and "smile_score_app" in rows[0]:
+        report(rows, "미소(앱과 동일)", "smile_score_app", "label_smile", 0.35)
+    else:
+        report(rows, "미소(raw, 구버전 CSV — 게이팅 전 값이라 앱과 다를 수 있음)", "smile_score", "label_smile", 0.35)
+
+    if rows and "tension_score_app" in rows[0]:
+        report(rows, "긴장(앱과 동일)", "tension_score_app", "label_tension", 0.4)
+    else:
+        report(rows, "긴장(raw, 구버전 CSV — baseline 보정 전 값이라 앱과 다를 수 있음)", "tension_score", "label_tension", 0.4)
 
 
 if __name__ == "__main__":

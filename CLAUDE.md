@@ -39,7 +39,7 @@ python app.py
 
 1. **순수 로직 유닛테스트** (CI 연동, `tests/test_*.py`, labeling 하위 제외)
    ```bash
-   pip install numpy opencv-python-headless pytest   # torch/whisper/mediapipe 불필요
+   pip install numpy "opencv-python-headless<5" pytest   # torch/whisper/mediapipe 불필요 — <5 고정 이유는 ci.yml 주석 참고
    pytest tests/test_scoring.py tests/test_blink_analyzer.py tests/test_expression_analyzer.py \
           tests/test_gaze_analyzer.py tests/test_interview_question.py tests/test_llm_feedback.py -v
    ```

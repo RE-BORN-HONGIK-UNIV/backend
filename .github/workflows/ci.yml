@@ -48,9 +48,13 @@ jobs:
           python-version: "3.11"
           # cache: pip 안 씀 — requirements.txt/pyproject.toml이 레포에 없어서
           # 캐시 키를 못 잡고 setup-python 자체가 에러로 죽음 (실제로 한 번 겪음)
-      - run: pip install numpy opencv-python-headless pytest
+      # opencv-python-headless<5 로 고정 — 5.0.0부터 CascadeClassifier가 headless
+      # 패키지 단독으로는 안 딸려와서(opencv-contrib-python이 있어야 함) 2026-09-18
+      # CI에서 test_smile_cascade.py가 AttributeError로 깨짐. smile_cascade.py는
+      # 이미 폐기·기록용 보존 모듈이라 새 의존성(contrib) 추가보다 버전 고정이 맞음.
+      - run: pip install numpy "opencv-python-headless<5" pytest
       - run: >
           pytest tests/test_scoring.py tests/test_blink_analyzer.py
           tests/test_expression_analyzer.py tests/test_gaze_analyzer.py
           tests/test_interview_question.py tests/test_llm_feedback.py
-          tests/test_smile_cascade.py -v
+          tests/test_smile_cascade.py tests/test_set_baseline.py -v
