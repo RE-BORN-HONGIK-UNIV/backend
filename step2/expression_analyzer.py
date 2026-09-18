@@ -2,8 +2,18 @@
 
 MediaPipe FaceLandmarker가 뽑아주는 52개 ARKit 스타일 blendshape 중,
 비언어적 소통 코칭에 의미 있는 신호만 골라 쓴다.
-- 미소: mouthSmileLeft / mouthSmileRight
-- 긴장: browDownLeft / browDownRight(미간 찌푸림, AU4 corrugator supercilii)
+- 미소: mouthSmileLeft / mouthSmileRight (AU12, 광대근/zygomaticus major)
+- 긴장: browDownLeft / browDownRight (AU4, 눈썹내림근/corrugator supercilii)
+
+이 blendshape ↔ FACS Action Unit 대응 자체의 근거: Turrisi, R., Iacono Isidoro,
+S., Bruschetta, R., Famà, F., Campisi, A., Aiello, S., Cusimano, G., Ruta, L.,
+Pioggia, G., & Tartarisco, G. (2026). "Blendshape features meet action units:
+a clinical mapping for enhancing facial expression analysis." Computers in
+Human Behavior Reports. — 임상심리사·심리치료사 10명이 MediaPipe 52개
+blendshape를 AU에 매핑해 합의 검증(88% 만장일치, 98% 과반 일치)한 논문으로,
+mouthSmileLeft/Right=AU12, browDownLeft/Right=AU4, eyeSquintLeft/Right=AU7,
+cheekSquintLeft/Right=AU6 대응을 명시적으로 확인해줌 — 이전까지는 이 대응을
+일반적인 FACS 지식으로 추정만 했는데, 이 논문으로 대응 자체의 출처가 생김.
 """
 
 SMILE_KEYS = ["mouthSmileLeft", "mouthSmileRight"]
@@ -29,8 +39,24 @@ SMILE_KEYS = ["mouthSmileLeft", "mouthSmileRight"]
 TENSION_KEYS = ["browDownLeft", "browDownRight"]
 JAW_OPEN_KEY = "jawOpen"
 
-# 근거자료 없는 잠정치 — MediaPipe blendshape 점수 스케일에 대한 엔지니어링 추정.
-# 팀 자체 라벨링 데이터(눈으로 봐도 웃음/긴장이 맞는지)로 검증·조정 필요 (2025-09 재검토).
+# SMILE_THRESHOLD: 자체 라벨링(48+45프레임)으로 튜닝한 잠정치였는데, 2026-09-18에
+# 독립된 임상 연구에서 비슷한 값을 찾음 — Dotzer, M., Kachel, U., Huhsmann, J.,
+# Huscher, H., Raveling, N., Kugelmann, K., Blank, S., Neitzel, I., Buschermöhle,
+# M., von Polier, G. G., & Radeloff, D. (2025). "Identification of smile events
+# using automated facial expression recognition during the Autism Diagnostic
+# Observation Schedule (ADOS-2): a proof-of-principle study." Frontiers in
+# Psychiatry. DOI: 10.3389/fpsyt.2025.1497583. 이 논문은 Apple ARKit(MediaPipe와
+# 같은 계열의 0~1 스케일 blendshape, 52개 중 겹치는 항목 다수)의 mouthSmile
+# blendshape 단독으로 미소 이벤트를 판정하는 최적 임계값을 데이터 기반으로
+# 구해서 **0.395**를 제시(사람 평가자 대비 민감도 96.43%, 특이도 96.08%,
+# 카파 0.918 — n=79 테스트셋). 우리 값(0.35)과 상당히 가까워서 방향성 근거로는
+# 쓸 수 있지만, 촬영 장비·모델 버전·캡처 조건이 달라 그 논문 숫자를 그대로
+# 가져다 쓰지는 않음 — 임계값 변경은 팀 컨벤션대로 자체 evaluate_threshold.py
+# 재검증을 거친 뒤에만 반영 (다음 액션: ACCURACY_NOTES.md 참고).
+# TENSION_THRESHOLD: browDown(AU4)에 대한 동급 임상 연구는 아직 못 찾음 — 지표
+# 선택(browDown=AU4)은 위 Larsen et al./Turrisi et al.로 근거가 있지만, 0.4라는
+# 숫자 자체의 외부 근거는 없음. 자체 라벨링 검증만으로 유지 중 (근거자료 없는
+# 잠정치, ACCURACY_NOTES.md "긴장 임계값" 참고).
 SMILE_THRESHOLD = 0.35
 TENSION_THRESHOLD = 0.4
 

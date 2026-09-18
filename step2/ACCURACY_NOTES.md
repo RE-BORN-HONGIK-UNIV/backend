@@ -16,8 +16,8 @@ CNN 모델 정확도까지 실측 보고(prolongation 80.85% / energy 76.61% / t
 | 깜빡임 정상 범위 | 10~30회/분 | 문헌 근거 있음 + **1차 실측 검증 완료** | Bentivoglio et al. (1997) 등. 48프레임 라벨 기준 정확도 95.8% (recall 100%, precision 50% — 표본 작음, 아래 "1차 검증 결과" 참고) |
 | 시선 고정 이상 구간 | 3~5초 | 문헌 근거 있음 (방향 주의) | Binetti et al. (2016) |
 | 시선 판정 각도(yaw/pitch) | 15도 → **10도로 조정함** | **문헌 근거로 코드 수정함** | Cone of Direct Gaze 연구(Bell Labs 1969 계열, 화상회의 재현 연구) — 사람이 "눈 마주침"을 인지하는 범위는 수평 4.5도/수직 5.5도. 우리 구조(머리방향+눈동자 위치 AND 결합)엔 그대로 못 쓰지만 15도는 근거 대비 너무 느슨했음. 10도로 좁혀 실제 영상 재검증 완료 (아래 참고) |
-| 미소 임계값 | 0.35 + jawOpen 게이팅(0.05) + **고득점 예외(≥0.5) 추가** | **2차 검증(4~6번째 인물, 3영상·45프레임)까지 거쳐 코드 수정 완료** | 48프레임 검증(1차): 게이팅 전 정확도 56.2%(오탐 20건) → 게이팅 후 87.5%(오탐 5건). 2차(아래 "2차 검증" 참고): 대안 4종(게이팅 제거·기하학적 계산·지속시간 필터·Haar Cascade) 전부 실패(Haar는 4번째 인물에서 일시 개선돼 보였으나 5번째에서 뒤집힘) → 6번째 인물("거의 내내 웃는" 영상)에서 착안한 "원본 미소 점수 고득점이면 게이팅 예외" 가설을 3영상·45프레임 합산으로 검증, 정확도 64.4%→80%·recall 15.8%→68.4% 확인 후 `SMILE_HIGH_CONFIDENCE_BYPASS=0.5`로 코드 반영 |
-| 긴장 임계값 | 0.4, 지표는 browDown(AU4) 단독으로 축소 | **문헌 근거로 지표 구성 수정 완료(3차 검증)**, 임계값 자체(0.4)는 표본 편향으로 조정 보류 | Larsen, Norris & Cacioppo (2003) — AU4(corrugator supercilii)는 부정 정서의 검증된 지표. eyeSquint(AU7)는 진짜 웃음에도 반응(오염 확인)해서 지표에서 제외, 4영상 합산 재검증으로 오탐 2건 해소·진탐 손실 없음 확인 (아래 "3차 검증" 참고). 0.4→0.3 조정 여부는 여전히 표본 편향으로 미결 |
+| 미소 임계값 | 0.35 + jawOpen 게이팅(0.05) + **고득점 예외(≥0.5) 추가** | **2차 검증(4~6번째 인물, 3영상·45프레임)까지 거쳐 코드 수정 완료**, 4차에서 독립 임상 연구로 방향성 외부 검증 확보 | 48프레임 검증(1차): 게이팅 전 정확도 56.2%(오탐 20건) → 게이팅 후 87.5%(오탐 5건). 2차(아래 "2차 검증" 참고): 대안 4종(게이팅 제거·기하학적 계산·지속시간 필터·Haar Cascade) 전부 실패(Haar는 4번째 인물에서 일시 개선돼 보였으나 5번째에서 뒤집힘) → 6번째 인물("거의 내내 웃는" 영상)에서 착안한 "원본 미소 점수 고득점이면 게이팅 예외" 가설을 3영상·45프레임 합산으로 검증, 정확도 64.4%→80%·recall 15.8%→68.4% 확인 후 `SMILE_HIGH_CONFIDENCE_BYPASS=0.5`로 코드 반영. 4차(아래 참고): Dotzer et al. (2025, Frontiers in Psychiatry)가 ARKit mouthSmile 단독 임계값을 데이터 기반으로 0.395로 도출(민감도 96.43%, 특이도 96.08%) — 우리 0.35와 근접해 방향성 외부 검증됨 |
+| 긴장 임계값 | 0.4, 지표는 browDown(AU4) 단독으로 축소 | **문헌 근거로 지표 구성 수정 완료(3차 검증)**, AU 대응 자체도 4차에서 임상 검증 논문으로 보강, 임계값 자체(0.4)는 표본 편향으로 조정 보류 | Larsen, Norris & Cacioppo (2003) — AU4(corrugator supercilii)는 부정 정서의 검증된 지표. eyeSquint(AU7)는 진짜 웃음에도 반응(오염 확인)해서 지표에서 제외, 4영상 합산 재검증으로 오탐 2건 해소·진탐 손실 없음 확인 (아래 "3차 검증" 참고). browDown=AU4·eyeSquint=AU7 대응 자체는 Turrisi et al. (2026)의 임상심리사 10인 합의 매핑으로 재확인(아래 "4차 검증" 참고). 0.4→0.3 조정 여부는 여전히 표본 편향으로 미결 |
 
 ## 1차 검증 결과 (2026-09-12, 48프레임·3인)
 
@@ -311,6 +311,76 @@ browDown 단독으로 바꾸면 **v2의 오탐 2건이 전부 사라지고, 다�
 유닛테스트 2개 추가(`tests/test_expression_analyzer.py`) — eyeSquint 단독으로는
 긴장 점수가 오르지 않는지, browDown만으로 정상 작동하는지 확인.
 
+## 4차 검증 (2026-09-18, 문헌 검색 추가 — 지표 대응 자체와 임계값 숫자 근거 보강)
+
+3차 검증까지는 "AU4/AU7이 뭘 재는 근육인지"를 일반적인 FACS 지식(Ekman 계열
+문헌)으로 추정해서 코드에 반영했는데, **"MediaPipe의 이 특정 blendshape가
+정말로 그 AU에 대응하는지" 자체를 검증한 논문**이 있는지, 그리고 "임계값 숫자
+자체"에 외부 근거를 붙일 수 있는지 웹 검색으로 추가 확인함.
+
+### (g) MediaPipe blendshape ↔ AU 대응 자체를 검증한 임상 논문 발견
+
+Turrisi, R., Iacono Isidoro, S., Bruschetta, R., Famà, F., Campisi, A.,
+Aiello, S., Cusimano, G., Ruta, L., Pioggia, G., & Tartarisco, G. (2026).
+"Blendshape features meet action units: a clinical mapping for enhancing
+facial expression analysis." *Computers in Human Behavior Reports.*
+
+임상심리사·심리치료사 10명이 MediaPipe FaceLandmarker의 52개 blendshape를
+FACS AU에 독립적으로 매핑하고 합의 과정을 거쳐 검증(88% 만장일치, 98% 과반
+일치)한 논문 — MediaPipe 52 blendshape ↔ AU의 "최초 공개 표준 매핑 시도" 중
+하나라고 저자들이 직접 밝힘. 확인된 대응:
+
+| blendshape | AU | 비고 |
+|---|---|---|
+| mouthSmileLeft/Right | AU12 (입꼬리당김근) | — |
+| browDownLeft/Right | AU4 (눈썹내림근) | — |
+| eyeSquintLeft/Right | AU7 (눈꺼풀조임근) | 10명 중 6명은 AU44도 보조 대응으로 지목 |
+| cheekSquintLeft/Right | AU6 (눈둘레근) | 2차 검증에서 "이 모델은 항상 0에 가까움"으로 실측 확인한 바로 그 blendshape — 매핑 자체는 맞지만 이 MediaPipe 버전의 구현이 사실상 죽어있는 것으로 재확인 |
+
+이 논문이 생기면서 "browDown=AU4, eyeSquint=AU7"이라는 우리 코드의 전제가
+더 이상 일반 지식의 추정이 아니라 **MediaPipe 전용으로 검증된 출처**를 갖게
+됨. `step2/expression_analyzer.py` 모듈 docstring과 `TENSION_KEYS` 주석에
+이 인용을 추가함.
+
+### (h) 임계값 숫자 자체에 외부 근거를 붙일 수 있는지 탐색 — 미소는 성공, 긴장은 미확보
+
+**미소 임계값(0.35)**: Dotzer, M., Kachel, U., Huhsmann, J., Huscher, H.,
+Raveling, N., Kugelmann, K., Blank, S., Neitzel, I., Buschermöhle, M., von
+Polier, G. G., & Radeloff, D. (2025). "Identification of smile events using
+automated facial expression recognition during the Autism Diagnostic
+Observation Schedule (ADOS-2): a proof-of-principle study." *Frontiers in
+Psychiatry.* DOI: 10.3389/fpsyt.2025.1497583.
+
+Apple ARKit(MediaPipe와 같은 계열의 0~1 스케일 blendshape 출력, 겹치는
+blendshape 다수)의 mouthSmile blendshape 단독으로 미소 이벤트를 판정하는
+최적 임계값을 아동 158개 5초 구간 영상으로 데이터 기반 산출 — **0.395**를
+제시했고, 사람 평가자 대비 민감도 96.43%·특이도 96.08%·카파 0.918(n=79
+테스트셋)로 검증됨. 우리 `SMILE_THRESHOLD=0.35`와 상당히 가까움 — 서로
+독립된 두 검증(우리 자체 라벨링 vs 이 임상 연구)이 비슷한 값에 수렴한다는
+점에서 방향성 근거가 보강됨. **단, 촬영 장비(ARKit TrueDepth vs 일반
+카메라+MediaPipe)·모델 버전·캡처 조건이 달라서 그 논문의 0.395를 그대로
+가져다 코드에 넣지는 않음** — 임계값 자체를 바꾸려면 팀 컨벤션대로
+`evaluate_threshold.py`로 우리 데이터 재검증을 거쳐야 함(CLAUDE.md 컨벤션).
+`SMILE_THRESHOLD` 주석에 이 인용과 판단 근거를 추가함.
+
+**긴장 임계값(0.4)**: browDown(AU4) 단독 blendshape에 대해 이와 동급으로
+"데이터 기반 최적 임계값"을 제시한 논문은 검색 범위 내에서 찾지 못함(anger
+표정 전체는 AU4+AU5+AU7+AU23 조합으로 다루는 연구는 있었으나, browDown 단독
+수치 임계값 연구는 없었음). 즉 **지표 선택(browDown=AU4가 맞는 신호)**은
+Larsen et al. (2003)·Turrisi et al. (2026)로 근거가 있지만, **0.4라는 숫자
+자체**는 여전히 자체 라벨링 검증에만 의존 — 이 gap은 이번에 못 메웠고,
+`TENSION_THRESHOLD` 주석에 이 사실을 솔직하게 남겨둠.
+
+### 결론 (4차)
+
+- **지표 선택(어떤 blendshape를 쓸지)**: 미소·긴장 둘 다 이제 "MediaPipe
+  blendshape ↔ AU" 대응 자체가 임상 검증 논문(Turrisi et al. 2026)으로
+  뒷받침됨 — 이전엔 일반 FACS 지식으로 추정만 했던 부분.
+- **임계값 숫자**: 미소(0.35)는 독립 임상 연구(Dotzer et al. 2025)의
+  데이터 기반 최적값(0.395)과 근접해 방향성 외부 검증을 얻음. 긴장(0.4)은
+  동급 연구를 찾지 못해 여전히 자체 라벨링 검증에만 의존 — 이 비대칭은
+  솔직하게 문서화하고 다음 액션에 남김.
+
 ## 결론
 
 - 깜빡임: 1단계와 동급 — 논문 인용 + 1차 실측 검증까지 완료.
@@ -324,13 +394,17 @@ browDown 단독으로 바꾸면 **v2의 오탐 2건이 전부 사라지고, 다�
   게이팅 예외" 가설을 3영상·45프레임 합산으로 검증(정확도 64.4%→80%, recall
   15.8%→68.4%) 후 코드에 반영 완료** — `SMILE_HIGH_CONFIDENCE_BYPASS=0.5`
   (`step2/expression_analyzer.py`). OpenFace 등 정식 툴킷 도입은 불필요해짐
-  (위 "2차 검증" (a)~(f) 참고).
+  (위 "2차 검증" (a)~(f) 참고). **4차 검증**에서 독립 임상 연구(Dotzer et al.
+  2025)의 데이터 기반 mouthSmile 최적 임계값(0.395)이 우리 값(0.35)과 근접함을
+  확인해 방향성 외부 검증까지 확보(아래 "4차 검증" 참고).
 - 긴장: 문헌(Larsen, Norris & Cacioppo 2003) 기준으로 지표를 browDown(AU4)
   단독으로 재설계 — eyeSquint(AU7)가 진짜 웃음에도 반응해 오염시키는 걸
   실측으로 확인(웃음 프레임 eyeSquint≈0.36~0.38 vs browDown≈0.004~0.006)하고
   제외함. 4영상 합산 재검증으로 오탐 2건 해소, 진탐 손실 없음 확인 후 코드
-  반영 완료(위 "3차 검증" 참고). 임계값 자체(0.4→0.3?)는 여전히 표본 편향으로
-  미결.
+  반영 완료(위 "3차 검증" 참고). **4차 검증**에서 browDown=AU4·eyeSquint=AU7
+  대응 자체가 Turrisi et al. (2026)의 임상심리사 10인 합의 매핑으로 재확인됨
+  — 다만 임계값 숫자(0.4→0.3?)는 동급 임상 연구를 못 찾아 여전히 표본 편향
+  문제로 미결.
 - 공통 한계: 표본이 48프레임·3인(+ 2차로 1인, 3차로 카카오톡 영상 1인 추가)으로
   작고, 라벨링도 1인(본인) 단독 판단 — 1단계(463개 자체 데이터) 대비 아직
   규모가 작음. 다음 액션 참고.
@@ -356,7 +430,8 @@ browDown 단독으로 바꾸면 **v2의 오탐 2건이 전부 사라지고, 다�
 3. **긴장 임계값(0.4→0.3?) 결정** — 표본 편향 해소되면 재검증 후 코드 반영 여부 결정. v4(카카오톡 영상)에서 발견된 "긴장 직전 빌드업 프레임"(t=16초, browDown 단독 0.216) 미검출 케이스도 이 재검증에 포함할 것.
 4. **라벨러 교차검증** — 지금은 본인 1인 라벨링. 최소 일부 프레임이라도 2명이 라벨링해서 일치도 확인하면 신뢰도 보강됨
 5. **AU6(cheekSquint) 기반 Duchenne 미소 판별 재시도 여부** — 이 MediaPipe 모델에서는 작동 안 함을 확인(2026-09-18)했으니, 다른 모델/버전으로 교체하지 않는 한 보류. 미소는 계속 `SMILE_HIGH_CONFIDENCE_BYPASS` 경험적 방식 유지.
-6. 위 항목 반영되면 이 문서 표의 "근거 상태"를 "검증 완료"로 최종 갱신
+6. **긴장 임계값(0.4) 숫자 자체의 외부(임상 연구) 근거 탐색** — 4차 검증에서 미소 쪽은 Dotzer et al. (2025)로 방향성 외부 검증을 얻었지만, browDown(AU4) 단독의 데이터 기반 최적 임계값을 제시한 동급 연구는 아직 못 찾음. 새 논문이 나오거나 검색 범위를 넓히면 재탐색.
+7. 위 항목 반영되면 이 문서 표의 "근거 상태"를 "검증 완료"로 최종 갱신
 
 ## 데이터 출처 기록
 
