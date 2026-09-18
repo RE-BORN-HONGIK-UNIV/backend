@@ -3,11 +3,30 @@
 MediaPipe FaceLandmarker가 뽑아주는 52개 ARKit 스타일 blendshape 중,
 비언어적 소통 코칭에 의미 있는 신호만 골라 쓴다.
 - 미소: mouthSmileLeft / mouthSmileRight
-- 긴장: browDownLeft / browDownRight(미간 찌푸림), eyeSquintLeft / eyeSquintRight(눈 찡그림)
+- 긴장: browDownLeft / browDownRight(미간 찌푸림, AU4 corrugator supercilii)
 """
 
 SMILE_KEYS = ["mouthSmileLeft", "mouthSmileRight"]
-TENSION_KEYS = ["browDownLeft", "browDownRight", "eyeSquintLeft", "eyeSquintRight"]
+
+# 2026-09-18 재설계: 원래는 browDown(AU4)에 eyeSquint(AU7, 눈 찡그림)까지 더해서
+# 긴장 점수를 냈으나, FACS 문헌 기준으로 재검토함.
+# - AU4(눈썹내림근/corrugator supercilii)는 부정 정서·스트레스의 검증된 지표:
+#   Larsen, J. T., Norris, C. J., & Cacioppo, J. T. (2003). "Effects of positive
+#   and negative affect on electromyographic activity over zygomaticus major and
+#   corrugator supercilii." Psychophysiology, 40(5), 776-785.
+#   DOI: 10.1111/1469-8986.00078.
+# - AU7(눈꺼풀 조임근)은 위 문헌에서 긴장 특이적 지표로 다뤄지지 않고, 실측으로도
+#   진짜 웃음(Duchenne smile, 눈가 주름) 프레임에서 함께 올라가는 걸 확인함 —
+#   4번째 영상(카카오톡 촬영본)의 확실한 웃음 프레임에서 browDown≈0.004~0.006인
+#   반면 eyeSquint≈0.36~0.38까지 치솟아 긴장 점수를 오염시켰음. eyeSquint를 빼고
+#   browDown 단독으로 4영상(v1~v4, 총 프레임) 재검증한 결과, 기존에 있던 오탐
+#   2건(v2/vlog1)이 사라지고 진탐(TP) 손실은 없었음 — 나머지 영상들도 비-긴장
+#   구간의 최고점수가 전반적으로 낮아져(예: v3 0.291→0.019) 임계값과의 여유가
+#   커짐. 이후 AU6(orbicularis oculi, cheekSquintLeft/Right)로 Duchenne 미소
+#   판별도 시도했으나 이 MediaPipe 모델에서 cheekSquint 값이 항상 0에 가까워
+#   (45프레임 실측 최댓값 0.0000048) 사실상 작동하지 않음을 확인, 미소 쪽은
+#   SMILE_HIGH_CONFIDENCE_BYPASS(실측 기반 잠정치)를 그대로 유지함.
+TENSION_KEYS = ["browDownLeft", "browDownRight"]
 JAW_OPEN_KEY = "jawOpen"
 
 # 근거자료 없는 잠정치 — MediaPipe blendshape 점수 스케일에 대한 엔지니어링 추정.

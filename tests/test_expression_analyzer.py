@@ -36,6 +36,25 @@ def test_compute_expression_series_keeps_smile_when_jaw_closed():
     assert series[0][1] == 0.2
 
 
+def test_compute_expression_series_ignores_eye_squint_for_tension():
+    # 2026-09-18 재설계: eyeSquint(AU7)는 진짜 웃음에도 반응해 긴장 점수를 오염시켜서
+    # TENSION_KEYS에서 뺐음 — browDown이 낮으면 eyeSquint가 높아도 긴장 점수는 낮아야 함.
+    frames = [{"t": 0.0, "blendshapes": {
+        "browDownLeft": 0.005, "browDownRight": 0.005,
+        "eyeSquintLeft": 0.37, "eyeSquintRight": 0.37,
+    }}]
+    series = compute_expression_series(frames)
+    assert series[0][2] == 0.005
+
+
+def test_compute_expression_series_tension_from_brow_down_only():
+    frames = [{"t": 0.0, "blendshapes": {
+        "browDownLeft": 0.45, "browDownRight": 0.45,
+    }}]
+    series = compute_expression_series(frames)
+    assert series[0][2] == 0.45
+
+
 def test_summarize_expression_empty_series():
     result = summarize_expression([(0.0, None, None)])
     assert result == {"smile_ratio": 0.0, "tension_ratio": 0.0, "frame_count": 0}
