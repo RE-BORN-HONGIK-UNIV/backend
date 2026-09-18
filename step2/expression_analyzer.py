@@ -57,6 +57,15 @@ JAW_OPEN_KEY = "jawOpen"
 # 선택(browDown=AU4)은 위 Larsen et al./Turrisi et al.로 근거가 있지만, 0.4라는
 # 숫자 자체의 외부 근거는 없음. 자체 라벨링 검증만으로 유지 중 (근거자료 없는
 # 잠정치, ACCURACY_NOTES.md "긴장 임계값" 참고).
+#
+# compute_expression_series는 baseline_tension 인자를 받아 "절대 점수" 대신
+# "개인별 baseline(set_baseline.calibrate_baseline_tension) 대비 편차"로 비교하는
+# 것도 가능하다 — resting face 개인차를 캘리브레이션 단계에서 상쇄하려는 목적으로
+# 만들어졌으나, 4영상 재검증 결과 eyeSquint를 뺀 뒤로는 browDown 단독 신호
+# 자체가 이미 개인차가 적어서 baseline까지 빼면 과보정으로 진짜 긴장(v4)의
+# recall이 75%→0%로 악화됨을 확인함 — 그래서 app.py는 이 인자를 넘기지 않고
+# 기본값(0.0, 절대 임계값)을 그대로 씀. 함수 자체는 남겨둠(TENSION_KEYS 구성이
+# 다시 바뀌어 개인차가 커지면 재검토 여지 있음) — ACCURACY_NOTES.md "6차 검증" 참고.
 SMILE_THRESHOLD = 0.35
 TENSION_THRESHOLD = 0.4
 
@@ -83,12 +92,18 @@ def _avg(blendshapes, keys):
     return sum(vals) / len(vals) if vals else 0.0
 
 
-def compute_expression_series(frames):
+def compute_expression_series(frames, baseline_tension=0.0):
     """프레임 리스트 → 시간별 (t, smile_score, tension_score) 리스트.
     얼굴 미검출 프레임은 (t, None, None). 입을 벌린(말하는) 순간의 미소 오탐을
     줄이기 위해 jawOpen이 JAW_OPEN_GATE를 넘으면 그 프레임의 미소 점수는 0으로
     본다 — 단, 원본 미소 점수가 SMILE_HIGH_CONFIDENCE_BYPASS 이상으로 확실히
-    높으면 "말하며 웃는" 진짜 미소일 가능성이 커서 게이팅을 건너뛴다."""
+    높으면 "말하며 웃는" 진짜 미소일 가능성이 커서 게이팅을 건너뛴다.
+
+    baseline_tension: set_baseline.calibrate_baseline_tension()으로 잡은 개인별
+    캘리브레이션 구간 긴장 점수. tension_score는 raw 점수가 아니라 여기서 뺀 편차이고,
+    이후 TENSION_THRESHOLD와의 비교도 이 편차 기준으로 이뤄진다. 기본값 0.0은
+    캘리브레이션을 안 넘긴 호출(기존 테스트 등)을 위한 하위호환용 — 이 경우 이전과
+    동일하게 절대 임계값처럼 동작한다."""
     series = []
     for f in frames:
         bs = f.get("blendshapes")
@@ -101,7 +116,8 @@ def compute_expression_series(frames):
             smile = smile_raw
         else:
             smile = 0.0
-        series.append((f["t"], smile, _avg(bs, TENSION_KEYS)))
+        tension = _avg(bs, TENSION_KEYS) - baseline_tension
+        series.append((f["t"], smile, tension))
     return series
 
 

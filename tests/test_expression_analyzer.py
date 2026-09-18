@@ -55,6 +55,21 @@ def test_compute_expression_series_tension_from_brow_down_only():
     assert series[0][2] == 0.45
 
 
+def test_compute_expression_series_subtracts_baseline_tension():
+    # baseline_tension을 넘기면 절대값이 아니라 그 사람의 평소(캘리브레이션) 긴장
+    # 점수 대비 편차로 계산됨 — resting face가 원래 높은 사람을 오탐하지 않기 위함.
+    frames = [{"t": 0.0, "blendshapes": {"browDownLeft": 0.3, "browDownRight": 0.3}}]
+    series = compute_expression_series(frames, baseline_tension=0.25)
+    assert round(series[0][2], 4) == 0.05
+
+
+def test_compute_expression_series_defaults_baseline_tension_to_zero():
+    # baseline_tension을 안 넘기면 기존과 동일하게 절대값 그대로 동작(하위호환).
+    frames = [{"t": 0.0, "blendshapes": {"browDownLeft": 0.3, "browDownRight": 0.3}}]
+    series = compute_expression_series(frames)
+    assert series[0][2] == 0.3
+
+
 def test_summarize_expression_empty_series():
     result = summarize_expression([(0.0, None, None)])
     assert result == {"smile_ratio": 0.0, "tension_ratio": 0.0, "frame_count": 0}

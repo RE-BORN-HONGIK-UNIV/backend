@@ -31,3 +31,18 @@ def calibrate_baseline_gaze(calibration_frames, pose_idx, left_iris_idx, right_i
     if not yaws:
         return 0.0, 0.0
     return float(np.median(yaws)), float(np.median(pitches))
+
+
+def calibrate_baseline_tension(calibration_frames):
+    """"정면 보기" 5초 캘리브레이션 구간의 blendshape로 개인별 baseline 긴장 점수 계산.
+
+    1차 검증(ACCURACY_NOTES.md)에서 resting face가 원래 미간이 좁은 인물 1명에게
+    라벨이 쏠려 "원래 이런 얼굴"과 "진짜 긴장"을 절대 임계값(TENSION_THRESHOLD)만으로
+    구분하지 못한 문제가 있었음 — blink/gaze처럼 baseline 대비 편차로 판정하면 이
+    개인차가 캘리브레이션 단계에서 상쇄된다. 얼굴이 전혀 검출되지 않으면 0.0으로
+    폴백(=캘리브레이션 이전과 동일하게 절대 임계값처럼 동작)."""
+    from .expression_analyzer import TENSION_KEYS, _avg
+    values = [_avg(f["blendshapes"], TENSION_KEYS) for f in calibration_frames if f.get("blendshapes")]
+    if not values:
+        return 0.0
+    return float(np.median(values))

@@ -470,7 +470,81 @@ Larsen et al. (2003)·Turrisi et al. (2026)로 근거가 있지만, **0.4라는 
 - 이 결정 이후 3단계(모의 면접) 연동이나 프론트 UI 작업으로 넘어가도
   안면 정확도 지표가 발목 잡지 않는다고 판단.
 
-## 결론
+## 6차 검증 (2026-09-18) — baseline-relative 긴장 판정 재도입 시도 및 기각, 라벨링 하네스 버그 수정
+
+5차 검증으로 안면 정확도를 확정한 직후, 브랜치 정리 과정에서 **같은 날(9/16)
+다른 세션이 만들어뒀던 `claude/practical-curie-o3q4c5` 브랜치**를 발견함 — PR도
+없이 방치돼 있었지만, 내용을 보니 지금 것과는 다른 각도로 긴장 판정을 개선한
+시도였음. main에 그대로 올리면 안 되는 이유(eyeSquint 제거 이전 코드 기반이라
+merge 시 3차 검증 결과가 되돌아감)부터 확인하고, 오늘 확정한 코드 위에 아이디어만
+다시 얹어서 재검증함.
+
+### 시도한 것: 절대 임계값 → baseline 대비 편차
+
+`practical-curie` 세션의 핵심 아이디어: 긴장 점수를 절대값(TENSION_THRESHOLD=0.4)과
+비교하는 대신, 깜빡임·시선처럼 **앱 시작 5초 캘리브레이션 구간에서 그 사람의
+평소(resting face) 긴장 점수를 재고, 거기서 벗어난 정도로 판정**하자는 것.
+1차 검증(위 "1차 검증 결과" 절)에서 남겨뒀던 미해결 문제 — "video3 인물은 원래
+미간이 좁은 resting face라 0.4→0.3 조정 여부를 못 정함" — 를 정확히 겨냥함.
+
+`step2/set_baseline.py`에 `calibrate_baseline_tension()` 추가, `compute_expression_series`에
+`baseline_tension` 인자 추가(기본값 0.0, 하위호환) 후 4영상 풀링으로 재검증:
+
+| | tp | fp | tn | fn | accuracy | precision | recall |
+|---|---|---|---|---|---|---|---|
+| 긴장, baseline 보정 없음(5차와 동일) | 3 | 0 | 63 | 1 | 98.5% | 100% | **75%** |
+| 긴장, baseline 보정 적용 | 0 | 0 | 63 | 4 | 94.0% | — | **0%** |
+
+**결과는 역효과.** v4의 baseline_tension이 0.1075로 꽤 높게 잡히는데, 이미
+eyeSquint를 뺀 browDown 단독 신호는 개인차가 크지 않은 상태라(3차 검증에서
+확인) 여기서 baseline을 한 번 더 빼면 진짜 긴장 프레임(t=17/18/20, 원래
+0.44~0.50)이 전부 0.4 밑으로 떨어져 recall이 75%→0%로 추락함:
+
+| t | baseline 보정 없음 | baseline 보정 적용 | 라벨 |
+|---|---|---|---|
+| 17 | 0.4405 | 0.3330 | 1(긴장) |
+| 18 | 0.4261 | 0.3186 | 1(긴장) |
+| 20 | 0.4955 | 0.3880 | 1(긴장) |
+
+**결론**: `practical-curie`의 baseline-relative 아이디어는 **eyeSquint를 포함한
+구버전 TENSION_KEYS를 전제로 설계**된 해법이었음 — 그 버전은 eyeSquint 때문에
+개인차·잡음이 커서 baseline 보정이 실제로 효과가 있었을 것(그쪽 세션의 48프레임
+재검증에서도 오탐 5건이 사라졌다고 기록됨). 그런데 오늘 browDown 단독으로
+지표 자체를 바꾸면서 **같은 문제(resting face 개인차)가 이미 대부분 해결**돼
+있었고, 그 위에 baseline 보정까지 얹으면 "이중 보정"이 되어 깨끗한 신호를
+과도하게 깎아버림. **두 해법은 양립 가능한 게 아니라 같은 문제를 푸는 대체
+해법 관계였다는 게 이번 재검증으로 밝혀짐.**
+
+**코드 반영**: `calibrate_baseline_tension()` 함수와 `compute_expression_series`의
+`baseline_tension` 인자는 **남겨두되(단위테스트 포함), app.py의 실제 분석
+흐름에는 연결하지 않음** — TENSION_KEYS 구성이 앞으로 다시 바뀌어 개인차가
+커지는 경우 재검토할 수 있게 인프라만 보존. 유닛테스트 5개 추가
+(`tests/test_set_baseline.py` 3개, `tests/test_expression_analyzer.py`의
+baseline 관련 2개).
+
+### 별도로 확인된 것: 라벨링 하네스의 진짜 버그
+
+`practical-curie` 세션이 같은 날 발견한 것 — `extract_label_candidates.py`가
+CSV에 적던 `smile_score`가 jawOpen 게이팅 **이전** 원본값이었음. 앱이 실제로
+판정에 쓰는 값(게이팅 후, 이후 SMILE_HIGH_CONFIDENCE_BYPASS까지 반영된 값)과
+달라서, 이 컬럼만 보고 라벨링·검증하면 게이팅/바이패스 효과를 제대로 못 봄.
+
+이건 baseline 아이디어와 달리 **명백한 버그라 그대로 채택**함 — 다만 수정
+방식은 원래 제안(하네스에 게이팅 수식을 다시 구현해서 `smile_score_gated`
+컬럼 추가)이 아니라, **프로덕션 함수(`compute_expression_series`)를 하네스에서
+직접 호출**해서 `smile_score_app`/`tension_score_app` 컬럼에 "앱이 실제로 보는
+값"을 적도록 바꿈 — 수식을 두 곳에 따로 유지하면서 또 벌어질 수 있는 같은
+종류의 버그(하네스와 프로덕션 로직이 몰래 갈라지는 것)를 원천적으로 막기
+위함. `evaluate_threshold.py`도 이 새 컬럼을 우선 사용하도록 갱신(구버전
+CSV와는 하위호환 유지).
+
+### 다른 브랜치 정리
+
+이 재검증 과정에서 `claude/wizardly-darwin-jshgqo`(팀원 seyeon baek 작성,
+'이야기' 게시판 API)와 `stage3-interview-question`(팀원 yenny 작성, STT/면접
+질문) 브랜치는 이미 main에 전체 커밋이 merge돼 있는 걸 확인함(`git merge-base
+--is-ancestor` 검증) — 삭제해도 작업 손실 없음. `feature/pause-filler-refine`
+(팀원 yenny, 채움말 로직 재설계, 진행 중)은 아직 main에 없어 그대로 유지.
 
 - 깜빡임: 1단계와 동급 — 논문 인용 + 1차 실측 검증까지 완료.
 - 시선 판정 각도: **문헌 근거로 15도→10도 수정 완료**, 실제 영상 재검증까지 마침.
