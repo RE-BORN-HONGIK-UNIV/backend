@@ -76,6 +76,11 @@ def run_one(case):
     else:
         print("  (검출된 이벤트 없음)")
 
+    if result.get("cnn_prolongation_candidates"):
+        print(f"\n  CNN 연장 후보 (뭉쳐서 채움말 집계에서 제외됨, {len(result['cnn_prolongation_candidates'])}건):")
+        for c in result["cnn_prolongation_candidates"]:
+            print(f"    {c['start']:5.2f}s~{c['end']:5.2f}s  '{c['text']}'  (source={c['source']})")
+
     return {"file": case["file"], "expected_total": exp_total, "actual_total": actual_total, "match": full_match}
 
 
