@@ -3,7 +3,71 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from step2.expression_analyzer import detect_expression_segments, summarize_expression
+from step2.expression_analyzer import (
+    compute_expression_series,
+    detect_expression_segments,
+    summarize_expression,
+)
+
+
+def test_compute_expression_series_gates_moderate_smile_when_jaw_open():
+    # jawOpen이 게이트를 넘고, 미소 점수도 고득점 예외(0.5) 미만 — 게이팅으로 0점 처리
+    frames = [{"t": 0.0, "blendshapes": {
+        "mouthSmileLeft": 0.3, "mouthSmileRight": 0.3, "jawOpen": 0.2,
+    }}]
+    series = compute_expression_series(frames)
+    assert series[0][1] == 0.0
+
+
+def test_compute_expression_series_bypasses_gate_for_high_confidence_smile():
+    # 2026-09-16 재검증: 원본 미소 점수가 확실히 높으면(>=0.5) jawOpen과 무관하게 통과
+    frames = [{"t": 0.0, "blendshapes": {
+        "mouthSmileLeft": 0.6, "mouthSmileRight": 0.6, "jawOpen": 0.3,
+    }}]
+    series = compute_expression_series(frames)
+    assert series[0][1] == 0.6
+
+
+def test_compute_expression_series_keeps_smile_when_jaw_closed():
+    frames = [{"t": 0.0, "blendshapes": {
+        "mouthSmileLeft": 0.2, "mouthSmileRight": 0.2, "jawOpen": 0.01,
+    }}]
+    series = compute_expression_series(frames)
+    assert series[0][1] == 0.2
+
+
+def test_compute_expression_series_ignores_eye_squint_for_tension():
+    # 2026-09-18 재설계: eyeSquint(AU7)는 진짜 웃음에도 반응해 긴장 점수를 오염시켜서
+    # TENSION_KEYS에서 뺐음 — browDown이 낮으면 eyeSquint가 높아도 긴장 점수는 낮아야 함.
+    frames = [{"t": 0.0, "blendshapes": {
+        "browDownLeft": 0.005, "browDownRight": 0.005,
+        "eyeSquintLeft": 0.37, "eyeSquintRight": 0.37,
+    }}]
+    series = compute_expression_series(frames)
+    assert series[0][2] == 0.005
+
+
+def test_compute_expression_series_tension_from_brow_down_only():
+    frames = [{"t": 0.0, "blendshapes": {
+        "browDownLeft": 0.45, "browDownRight": 0.45,
+    }}]
+    series = compute_expression_series(frames)
+    assert series[0][2] == 0.45
+
+
+def test_compute_expression_series_subtracts_baseline_tension():
+    # baseline_tension을 넘기면 절대값이 아니라 그 사람의 평소(캘리브레이션) 긴장
+    # 점수 대비 편차로 계산됨 — resting face가 원래 높은 사람을 오탐하지 않기 위함.
+    frames = [{"t": 0.0, "blendshapes": {"browDownLeft": 0.3, "browDownRight": 0.3}}]
+    series = compute_expression_series(frames, baseline_tension=0.25)
+    assert round(series[0][2], 4) == 0.05
+
+
+def test_compute_expression_series_defaults_baseline_tension_to_zero():
+    # baseline_tension을 안 넘기면 기존과 동일하게 절대값 그대로 동작(하위호환).
+    frames = [{"t": 0.0, "blendshapes": {"browDownLeft": 0.3, "browDownRight": 0.3}}]
+    series = compute_expression_series(frames)
+    assert series[0][2] == 0.3
 
 
 def test_summarize_expression_empty_series():

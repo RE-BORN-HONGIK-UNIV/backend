@@ -18,6 +18,7 @@ app.py          Flask 라우트 전체 (인증, /analyze*, /community/*, /interv
 step1/          음성 분석 — analyze_filler_final.py(채움말), inference_cnn_final.py(CNN),
                 llm_feedback.py(코칭 피드백 생성, 순수 함수는 _user_prompt)
 step2/          표정·시선 — *_analyzer.py(blink/gaze/expression), scoring.py, set_baseline.py
+                smile_cascade.py — OpenCV Haar Cascade 미소 검출 시도, 인물 간 일반화 실패로 폐기(기록용 보존)
                 ACCURACY_NOTES.md — 임계값 근거·검증 이력 (문헌 인용 + 실측 검증)
 step3/          면접 질문(interview_question.py) · TTS(tts.py)
 tests/          유닛테스트(pytest) + tests/labeling/(정확도 검증 하네스, 수동)
@@ -38,7 +39,7 @@ python app.py
 
 1. **순수 로직 유닛테스트** (CI 연동, `tests/test_*.py`, labeling 하위 제외)
    ```bash
-   pip install numpy opencv-python-headless pytest   # torch/whisper/mediapipe 불필요
+   pip install numpy "opencv-python-headless<5" pytest   # torch/whisper/mediapipe 불필요 — <5 고정 이유는 ci.yml 주석 참고
    pytest tests/test_scoring.py tests/test_blink_analyzer.py tests/test_expression_analyzer.py \
           tests/test_gaze_analyzer.py tests/test_interview_question.py tests/test_llm_feedback.py -v
    ```
