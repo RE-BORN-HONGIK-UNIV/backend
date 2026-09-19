@@ -103,7 +103,7 @@ def _calculate_pause_score(long_pause_rate_per_min, long_pause_ratio):
 # 공개 진입점
 # -----------------------------------------------------------------------------
 
-def analyze_pause(audio_path, total_duration_sec=None):
+def analyze_pause(audio_path, total_duration_sec=None, calibration=None):
     """음성 파일에서 답변 내부 멈춤을 분석한다.
 
     Args:
@@ -132,9 +132,16 @@ def analyze_pause(audio_path, total_duration_sec=None):
         )
         total_duration = max(total_duration, 0.001)
 
+        # 배경소음이 있는 환경이면 무음 판정 기준(top_db)을 살짝 완화.
+        # calibration.background_peak_db가 높을수록(조용하지 않을수록) top_db를 키워서
+        # 배경소음을 발화로 오인하지 않게 한다. 잠정치 — 실측 데이터로 재보정 필요.
+        top_db = SILENCE_TOP_DB
+        if calibration and calibration.get("background_peak_db", -120) > -40:
+            top_db = SILENCE_TOP_DB + 5
+
         non_silent_intervals = librosa.effects.split(
             y,
-            top_db=SILENCE_TOP_DB,
+            top_db=top_db,
         )
 
         events = _get_internal_pause_events(non_silent_intervals, sr)

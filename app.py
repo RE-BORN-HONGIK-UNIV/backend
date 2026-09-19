@@ -55,7 +55,7 @@ from step2.set_baseline import calibrate_baseline_ear, calibrate_baseline_gaze
 
 
 # Step1 채움말 분석 (librosa 소리구간 + Whisper word timestamp 결합)
-from step1.analyze_filler import analyze_filler
+from step1.analyze_filler import analyze_filler, analyze_calibration
 
 # Step1 멈춤 분석 (librosa 소리구간 사이 무음 길이 기반, 1.2초 이상 "긴 멈춤"으로 분류)
 from step1.analyze_pause import analyze_pause
@@ -553,6 +553,38 @@ def health():
         'whisper_loaded': whisper_model is not None,
     })
 
+@app.route('/api/stage1/calibrate', methods=['POST'])
+def stage1_calibrate():
+    """Step1 · 캘리브레이션 (5초 무음 + 10초 낭독 + 1문장 자유발화).
+    점수/오각형 차트에는 반영되지 않음 — /analyze 호출 시 filler/pause 임계값
+    보정용으로만 쓰인다.
+
+    TODO(추후): 현재는 매번 필수로 새로 녹음하게 되어 있음.
+    나중엔 유저별로 최근 캘리브레이션 결과를 DB에 저장해두고
+    "지난번 값 사용하기" 옵션을 주는 방식으로 바꿀 예정.
+    """
+    load_models()
+
+    if 'file' not in request.files:
+        return jsonify({'error': '파일이 없습니다'}), 400
+
+    f = request.files['file']
+    tmp_path = None
+    try:
+        tmp_path = save_temp_file(f)
+        calibration_result = analyze_calibration(tmp_path, whisper_model=whisper_model)
+        return jsonify(calibration_result)
+    except Exception as e:
+        import traceback
+        print(f"[ERROR] 캘리브레이션 실패: {traceback.format_exc()}")
+        return jsonify({'error': str(e), 'detail': traceback.format_exc()}), 500
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except:
+                pass
+
 @app.route('/analyze', methods=['POST'])
 def analyze():
     load_models()  # 최초 호출 시에만 실제로 torch/whisper를 로드 (이후엔 즉시 리턴)
@@ -565,6 +597,17 @@ def analyze():
     ext = os.path.splitext(f.filename)[1].lower()
     if ext not in allowed:
         return jsonify({'error': f'지원하지 않는 형식: {ext}'}), 400
+
+    # 프론트에서 캘리브레이션 결과를 form-data 'calibration' 필드로 같이 보낸다.
+    # 없으면 기존처럼 이 녹음 자체에서 개인 기준값을 추정 (하위 호환).
+    calibration = None
+    calibration_raw = request.form.get('calibration')
+    if calibration_raw:
+        try:
+            import json
+            calibration = json.loads(calibration_raw)
+        except (ValueError, TypeError):
+            print(f"[WARNING] calibration 파싱 실패, 무시하고 진행")
 
     tmp_path = None
     try:
@@ -588,11 +631,11 @@ def analyze():
             window_count = 0
 
         # 2) 채움말 (librosa + Whisper) → 발화 유창성
-        filler_result = analyze_filler(tmp_path, whisper_model=whisper_model)
+        filler_result = analyze_filler(tmp_path, whisper_model=whisper_model, calibration=calibration)
         fluency = filler_result['fluency_score']
 
         # 3) 멈춤 (librosa) → 침묵 조절력
-        pause_result = analyze_pause(tmp_path)
+        pause_result = analyze_pause(tmp_path, calibration=calibration)
         pause_ctrl = pause_result['pause_score']
 
         return jsonify({
