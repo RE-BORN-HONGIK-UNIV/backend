@@ -410,7 +410,7 @@ def analyze_filler(audio_path, whisper_model=None, total_duration_sec=None, cali
 if __name__ == "__main__":
     import sys
     if len(sys.argv) <= 1:
-        print("사용법: python analyze_filler_final.py <오디오파일경로>")
+        print("사용법: python analyze_filler.py <오디오파일경로>")
         raise SystemExit(1)
 
     result = analyze_filler(sys.argv[1])

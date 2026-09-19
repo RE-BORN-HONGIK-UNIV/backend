@@ -55,7 +55,10 @@ from step2.set_baseline import calibrate_baseline_ear, calibrate_baseline_gaze
 
 
 # Step1 채움말 분석 (librosa 소리구간 + Whisper word timestamp 결합)
-from step1.analyze_filler_final import analyze_filler
+from step1.analyze_filler import analyze_filler
+
+# Step1 멈춤 분석 (librosa 소리구간 사이 무음 길이 기반, 1.2초 이상 "긴 멈춤"으로 분류)
+from step1.analyze_pause import analyze_pause
 
 # Step1 LLM 코칭 피드백 (선택적 — 키 없으면 자동 폴백)
 from step1.llm_feedback import generate_feedback
@@ -193,7 +196,7 @@ except Exception as e:
     print(f"[WARNING] DB 연결 실패, DB 없이 서버 실행: {e}")
 
 MODEL_PATH = os.environ.get("MODEL_PATH", "best_size_large.pth")
-PAUSE_THRESHOLD = 1.2
+
 
 # ── CNN 슬라이딩 윈도우 설정 (inference_cnn_final.py 동일) ──────────
 TARGET_SR = 22050
@@ -488,46 +491,6 @@ def predict_cnn(audio_path):
     return {**result, **scores, 'window_count': len(chunks)}
 
 
-
-# ── 멈춤 분석 (analyze_pause.py 동일) ───────────────────────────────
-def analyze_pause(audio_path):
-    try:
-        y, sr = librosa.load(audio_path, sr=None)
-        total_duration = librosa.get_duration(y=y, sr=sr)
-        non_silent = librosa.effects.split(y, top_db=30)
-
-        anxious_pause_count = 0
-        anxious_pause_total = 0.0
-        all_pause_durations = []
-
-        for i in range(1, len(non_silent)):
-            prev_end = non_silent[i-1][1] / sr
-            curr_start = non_silent[i][0] / sr
-            pause_duration = curr_start - prev_end
-            if pause_duration > 0.1:
-                all_pause_durations.append(pause_duration)
-                if pause_duration >= PAUSE_THRESHOLD:
-                    anxious_pause_count += 1
-                    anxious_pause_total += pause_duration
-
-        anxious_pause_ratio = anxious_pause_total / total_duration if total_duration > 0 else 0
-        pause_score = round(max(0, min(100, 100 * (1 - anxious_pause_ratio))), 1)
-
-        print(f"[Pause] 모든 멈춤: {all_pause_durations}")
-        print(f"[Pause] 전체:{total_duration}, 불안멈춤합:{anxious_pause_total}")
-
-        return {
-            "pause_score":             pause_score,
-            "pause_count":             len(all_pause_durations),
-            "anxious_pause_count":     anxious_pause_count,
-            "anxious_pause_total_sec": round(anxious_pause_total, 2),
-            "anxious_pause_ratio":     round(anxious_pause_ratio, 4),
-            "total_duration_sec":      round(total_duration, 2),
-        }
-    except Exception as e:
-        print(f"[ERROR] pause 분석 실패: {e}")
-        return {"pause_score": 0, "pause_count": 0, "anxious_pause_count": 0,
-                "anxious_pause_total_sec": 0, "anxious_pause_ratio": 0, "total_duration_sec": 0}
 
 # ── API ──────────────────────────────────────────────────────────────
 @app.route('/api/signup', methods=['POST'])

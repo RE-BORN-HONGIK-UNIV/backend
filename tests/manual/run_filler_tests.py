@@ -9,7 +9,7 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
-from step1.analyze_filler_final import analyze_filler
+from step1.analyze_filler import analyze_filler
 
 AUDIO_DIR = r"C:\Users\seoyn\OneDrive\Desktop\filler_test"
 

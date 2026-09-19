@@ -1,6 +1,6 @@
 # 채움말(filler) 검출 로직 - 임계값 근거 정리
 
-코드(`step1/analyze_filler_final.py`)에 쓰인 상수들의 근거를 정리한 문서.
+코드(`step1/analyze_filler.py`)에 쓰인 상수들의 근거를 정리한 문서.
 발표/질의응답 때 "왜 이 값을 썼는지" 답할 때 참고.
 
 ---

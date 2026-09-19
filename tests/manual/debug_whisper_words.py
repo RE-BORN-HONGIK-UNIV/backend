@@ -8,7 +8,7 @@ import sys
 import librosa
 sys.path.insert(0, ".")  # step1 패키지 찾기 위함 (backend 폴더에서 실행 가정)
 
-from step1.analyze_filler_final import (
+from step1.analyze_filler import (
     get_word_segments, get_sound_intervals, _get_default_whisper_model, VERBATIM_PROMPT,
 )
 
