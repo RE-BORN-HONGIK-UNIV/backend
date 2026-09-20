@@ -2,16 +2,25 @@
 """
 채움말(filler) 검출 로직
 
-구성 (3갈래 검출 후 병합):
+구성 (3갈래 검출):
 1) 고신뢰 채움말 (어/음/아/에/애) - VERBATIM_PROMPT로 텍스트 복원 유도,
    독립 소리구간이면 채움말로 확정, 다른 단어와 뭉쳐 있으면 제외(연장으로 간주)
-2) 음향 기반 채움말 - 소리구간에서 Whisper 단어가 설명 못 하는 잔여 구간 탐지,
-   ZCR 개인 기준값으로 음성/숨소리 구분
-3) 조건부 채움말 (그/저/뭐/막 등) - Whisper 텍스트 매칭 + 독립 소리구간일 때만 인정
+2) 조건부 채움말 (그/저/뭐/막 등) - Whisper 텍스트 매칭 + 독립 소리구간일 때만 인정
+3) 음향 기반 채움말 후보 - 소리구간에서 Whisper 단어가 설명 못 하는 잔여 구간을
+   ZCR 개인 기준값으로 "채움말성 목소리"인지 판별
+
+점수/오각형 차트에는 1)+2)(텍스트로 확실히 확인된 것)만 반영한다. 3)은
+"acoustic_filler_candidates"로 별도 기록만 하고 점수에서 제외 - 실사용
+테스트에서 채움말 없이 녹음해도 문장 사이 숨소리가 오탐되는 문제가
+반복 확인됐고, ZCR만으로는 채움말/숨소리를 안정적으로 못 가른다는 게
+확인됐기 때문(근거는 /docs/filler_threshold_근거.md 참고). 완전히
+버리진 않는 이유: 캘리브레이션(개인 채움말/숨소리 ZCR 측정)이 계속
+의미를 갖게 하고, 정확도가 개선되면 다시 점수에 편입할 수 있도록
+검출 로직과 기록은 살려둔다.
 
 CNN(prolongation/tremor/energy)은 이미 전체 오디오를 슬라이딩 윈도우로 훑고
 있으므로, 이 파일이 CNN을 직접 호출하거나 구간을 실시간으로 넘기지는 않는다.
-다만 뭉쳐서 채움말 집계에서 제외된 구간은 cnn_prolongation_candidates로
+다만 뭉쳐서 채움말 집계에서 제외된 구간(1, 2번에서)은 cnn_prolongation_candidates로
 기록해두어, 나중에 CNN 재학습 결과와 "이 구간을 CNN이 실제로 연장으로
 잡아냈는지" 수동 대조하는 용도로만 쓴다.
 
@@ -159,38 +168,22 @@ def _is_voiced(y, sr, start, end, filler_baseline, breath_baseline):
 
 
 # -----------------------------------------------------------------------------
-# 캘리브레이션 (1단계 시작 전 5초 무음 + 10초 낭독 + 1문장 자유발화)
+# 캘리브레이션 (1단계 시작 전 5초 무음 + 낭독)
 # -----------------------------------------------------------------------------
-# 실제 면접 답변 녹음 "안에서" 개인 기준값을 추정하면, 그 녹음에 진짜 채움말이
-# 하나도 없거나(개인 채움말 ZCR을 못 구함) 무음 구간이 짧을 때(숨소리 기준값이
-# 부정확할 때) 예비값(ZCR_FALLBACK_THRESHOLD)으로 폴백되는 문제가 있었다.
-# 답변 녹음 전에 짧은 캘리브레이션 구간을 따로 받으면, 매번 안정적으로
-# "이 사람의 배경소음/입력음량/채움말 ZCR" 기준을 확보할 수 있다.
-#
-# 캘리브레이션 스크립트는 평범한 문장이면 됨 (예: "안녕하세요, 오늘 날씨가
-# 좋네요. 편하게 몇 마디 해보세요." 같은 자연스러운 낭독+자유발화) 
-# 자유발화 중 자연스럽게 "음/어"가 나오면 개인 채움말 ZCR도 덤으로 잡히고,
-# 안 나오면 배경소음/숨소리 기준값만 확보하고 채움말 쪽은 그대로 폴백 처리.
-#
-# 주의: 이 결과(오각형 차트, 불안도 점수)에는 캘리브레이션 구간 자체를
-# 포함하지 않는다 - 어디까지나 기준값 추정용.
 
 CALIBRATION_SILENCE_SEC = 5.0   # 배경소음/입력음량 측정용 무음 구간
 CLIPPING_AMPLITUDE = 0.99       # 이 값 이상이면 클리핑(입력 과다)으로 판단
 
 
 def analyze_calibration(calibration_audio_path, whisper_model=None):
-    """캘리브레이션 오디오(5초 무음 + 10초 낭독 + 1문장 자유발화)를 분석해서
-    이 사람/이 녹음 환경의 기준값을 뽑아낸다.
-
-    반환값은 analyze_filler()의 calibration 인자로 그대로 넘기면 된다.
-    """
+    """캘리브레이션 오디오(무음 + 낭독 + 자유발화)를 분석해서 이 사람/이
+    녹음 환경의 기준값을 뽑아낸다. analyze_filler()의 calibration 인자로
+    그대로 넘기면 된다 (음향 기반 후보 판별의 개인화에 쓰임)."""
     model = whisper_model or _get_default_whisper_model()
 
     y, sr = librosa.load(calibration_audio_path, sr=16000, mono=True)
     total_dur = len(y) / sr
 
-    # 1) 배경소음 구간 (맨 앞 CALIBRATION_SILENCE_SEC 초로 가정)
     silence_end_sample = int(min(CALIBRATION_SILENCE_SEC, total_dur) * sr)
     silence_segment = y[:silence_end_sample]
 
@@ -198,16 +191,9 @@ def analyze_calibration(calibration_audio_path, whisper_model=None):
     background_peak_db = float(librosa.amplitude_to_db([background_rms])[0]) if background_rms > 0 else -120.0
     background_zcr = _compute_zcr(y, sr, 0.0, silence_end_sample / sr)
 
-    # 2) 클리핑 체크 (전체 파일 기준 - 낭독/자유발화 구간 포함, 입력 장비 문제 조기 발견용)
     clipped_ratio = float((abs(y) >= CLIPPING_AMPLITUDE).mean())
-
-    # 3) 입력 음량 (전체 파일 기준 peak dB)
     overall_peak_db = float(librosa.amplitude_to_db([float(abs(y).max())])[0]) if len(y) else -120.0
 
-    # 4) 낭독+자유발화 구간(무음 이후)에서 개인 채움말 ZCR 추정 (기회가 되면).
-    #    스크립트에 "음/어"를 일부러 넣으라고 시키지 않으므로, 자연스럽게
-    #    나온 경우에만 잡힘 - 없으면 None 반환되고 호출부(analyze_filler)가
-    #    기존처럼 예비값으로 폴백한다.
     speech_start_sec = silence_end_sample / sr
     word_segments = get_word_segments(calibration_audio_path, model)
     speech_words = [w for w in word_segments if w["start"] >= speech_start_sec]
@@ -221,7 +207,7 @@ def analyze_calibration(calibration_audio_path, whisper_model=None):
         "background_peak_db": round(background_peak_db, 2),
         "background_zcr": round(background_zcr, 4) if background_zcr is not None else None,
         "clipped_ratio": round(clipped_ratio, 4),
-        "is_clipping": clipped_ratio > 0.001,  # 전체 샘플의 0.1% 이상이 클리핑이면 경고
+        "is_clipping": clipped_ratio > 0.001,
         "overall_peak_db": round(overall_peak_db, 2),
         "personal_filler_zcr": round(personal_filler_zcr, 4) if personal_filler_zcr is not None else None,
         "personal_breath_zcr": round(background_zcr, 4) if background_zcr is not None else None,
@@ -289,8 +275,9 @@ def _subtract_words_from_interval(interval_start, interval_end, words):
     return leftover
 
 
-def detect_acoustic_fillers(y, sr, sound_intervals, words, filler_baseline, breath_baseline):
-    """Whisper가 설명하지 못한 유성 잔여 구간을 비언어적 채움말 후보로 검출한다."""
+def detect_acoustic_filler_candidates(y, sr, sound_intervals, words, filler_baseline, breath_baseline):
+    """Whisper가 설명하지 못한 유성 잔여 구간을 채움말 '후보'로 검출한다.
+    점수에는 반영 안 되고 기록만 됨 (파일 상단 설명 참고)."""
     if not words:
         return []
 
@@ -310,10 +297,10 @@ def detect_acoustic_fillers(y, sr, sound_intervals, words, filler_baseline, brea
             if not _is_voiced(y, sr, leftover_start, leftover_end, filler_baseline, breath_baseline):
                 continue
             events.append({
-                "text": "(비언어적 채움말)",
+                "text": "(비언어적 채움말 후보)",
                 "start": leftover_start,
                 "end": leftover_end,
-                "type": "acoustic",
+                "type": "acoustic_candidate",
             })
 
     return events
@@ -338,10 +325,12 @@ def _get_default_whisper_model():
 def analyze_filler(audio_path, whisper_model=None, total_duration_sec=None, calibration=None):
     """채움말 분석 진입점. app.py 호출부와의 시그니처/반환키 호환 유지.
 
-    calibration: analyze_calibration()의 반환값을 그대로 넘기면, 개인 ZCR
-    기준값을 이 녹음 안에서 추정하는 대신 캘리브레이션 값을 사용한다.
-    없으면(=캘리브레이션 단계가 아직 프론트/라우트에 연결 안 된 경우) 기존처럼
-    이 녹음 자체에서 추정 - 하위 호환 유지."""
+    점수(score/total_count/filler_rate_per_min)는 텍스트로 확실히 확인된
+    채움말(고신뢰+조건부)만 반영한다. 음향 기반 후보는 별도로
+    acoustic_filler_candidates에 기록되고 점수에는 안 들어간다.
+
+    calibration: analyze_calibration()의 반환값을 넘기면, 음향 기반 후보
+    판별(개인 ZCR 기준값)에 사용한다. 없으면 이 녹음 자체에서 추정."""
     model = whisper_model or _get_default_whisper_model()
 
     word_segments = get_word_segments(audio_path, model)
@@ -363,12 +352,13 @@ def analyze_filler(audio_path, whisper_model=None, total_duration_sec=None, cali
         filler_baseline = _get_personal_zcr_baseline(y, sr, high_confidence_events)
         breath_baseline = _get_personal_breath_baseline(y, sr, sound_intervals, first_word_start, last_word_end)
 
-    acoustic_events = detect_acoustic_fillers(
+    acoustic_filler_candidates = detect_acoustic_filler_candidates(
         y, sr, sound_intervals, word_segments, filler_baseline, breath_baseline,
     )
 
-    all_events = sorted(
-        conditional_events + high_confidence_events + acoustic_events,
+    # 점수에 반영되는 건 이 목록뿐 - 음향 기반 후보는 안 섞는다.
+    scored_events = sorted(
+        conditional_events + high_confidence_events,
         key=lambda event: event["start"],
     )
 
@@ -376,31 +366,35 @@ def analyze_filler(audio_path, whisper_model=None, total_duration_sec=None, cali
         total_duration_sec = word_segments[-1]["end"] if word_segments else len(y) / sr
     total_duration_sec = max(float(total_duration_sec), 0.001)  # 0초 파일 등 예외 방어
 
-    filler_rate_per_min = len(all_events) / (total_duration_sec / 60.0)
+    filler_rate_per_min = len(scored_events) / (total_duration_sec / 60.0)
     sound_segment_count = len(sound_intervals)
-    filler_ratio = len(all_events) / sound_segment_count if sound_segment_count else 0.0
+    filler_ratio = len(scored_events) / sound_segment_count if sound_segment_count else 0.0
 
-    # 잠정 점수식 - 실제 서비스 라벨 데이터로 재보정 필요
+    # 잠정 점수식 - 실제 서비스 라벨 데이터로 재보정 필요.
+    # 3단계 구간(0~5/5~12/12+개 분당)으로 나눠 완만하게 감점.
     if filler_rate_per_min <= 5:
         score = 100 - filler_rate_per_min * 2
+    elif filler_rate_per_min <= 12:
+        score = 90 - (filler_rate_per_min - 5) * 3
     else:
-        score = 90 - (filler_rate_per_min - 5) * 6
+        score = 69 - (filler_rate_per_min - 12) * 4
     score = max(0, min(100, round(score, 1)))
 
     return {
         "score": score,
         "filler_rate_per_min": round(filler_rate_per_min, 2),
-        "total_count": len(all_events),
-        "high_confidence_count": sum(1 for e in all_events if e["type"] == "high"),
-        "conditional_count": sum(1 for e in all_events if e["type"] == "conditional"),
-        "acoustic_count": sum(1 for e in all_events if e["type"] == "acoustic"),
+        "total_count": len(scored_events),
+        "high_confidence_count": sum(1 for e in scored_events if e["type"] == "high"),
+        "conditional_count": sum(1 for e in scored_events if e["type"] == "conditional"),
+        "acoustic_count": 0,  # 점수 기준 개수 - 음향 기반은 점수에 안 들어가므로 항상 0
+        "events": scored_events,
+        "acoustic_filler_candidates": acoustic_filler_candidates,  # 점수 미반영, 기록용
+        "cnn_prolongation_candidates": cnn_prolongation_candidates,  # 점수 미반영, 기록용
         "personal_filler_zcr": round(filler_baseline, 4) if filler_baseline is not None else None,
         "personal_breath_zcr": round(breath_baseline, 4) if breath_baseline is not None else None,
-        "events": all_events,
-        "cnn_prolongation_candidates": cnn_prolongation_candidates,  # CNN 미호출, 나중에 수동 대조용 기록
         # app.py 기존 호환 alias
         "total_duration_sec": round(total_duration_sec, 2),
-        "filler_count": len(all_events),
+        "filler_count": len(scored_events),
         "fluency_score": score,
         "sound_segment_count": sound_segment_count,
         "filler_ratio": round(filler_ratio, 4),
@@ -414,13 +408,18 @@ if __name__ == "__main__":
         raise SystemExit(1)
 
     result = analyze_filler(sys.argv[1])
-    print(f"점수: {result['score']}")
+    print(f"점수(확실한 채움말 기준): {result['score']}")
     print(f"개인 채움말 ZCR: {result['personal_filler_zcr']} | 개인 숨소리 ZCR: {result['personal_breath_zcr']}")
     print(f"분당 채움말: {result['filler_rate_per_min']}개")
     print(f"총 {result['total_count']}건 (고신뢰 {result['high_confidence_count']} / "
-          f"조건부 {result['conditional_count']} / 음향 기반 {result['acoustic_count']})")
+          f"조건부 {result['conditional_count']})")
     for event in result["events"]:
         print(f"[{event['type']:>11}] {event['start']:.2f}s ~ {event['end']:.2f}s '{event['text']}'")
+
+    if result["acoustic_filler_candidates"]:
+        print(f"\n음향 기반 채움말 후보 (점수 미반영, {len(result['acoustic_filler_candidates'])}건):")
+        for c in result["acoustic_filler_candidates"]:
+            print(f"  {c['start']:.2f}s ~ {c['end']:.2f}s")
 
     if result["cnn_prolongation_candidates"]:
         print(f"\nCNN 연장 후보 (뭉쳐서 채움말 집계에서 제외됨, {len(result['cnn_prolongation_candidates'])}건):")
