@@ -607,7 +607,7 @@ def analyze():
             import json
             calibration = json.loads(calibration_raw)
         except (ValueError, TypeError):
-            print(f"[WARNING] calibration 파싱 실패, 무시하고 진행")
+            print("[WARNING] calibration 파싱 실패, 무시하고 진행")
 
     tmp_path = None
     try:
