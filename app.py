@@ -80,7 +80,13 @@ def _require_env(key):
 app = Flask(__name__)
 CORS(app)
 
-app.config['SQLALCHEMY_DATABASE_URI'] = _require_env('DATABASE_URL')
+# Render가 주는 connectionString은 "postgres://" 스킴인데, SQLAlchemy 1.4+
+# (Flask-SQLAlchemy 3.x)는 이 스킴을 완전히 버려서 NoSuchModuleError로 죽는다.
+# psycopg2 드라이버가 여전히 처리 가능한 "postgresql://"로 바꿔서 넣어준다.
+_database_url = _require_env('DATABASE_URL')
+if _database_url.startswith('postgres://'):
+    _database_url = _database_url.replace('postgres://', 'postgresql://', 1)
+app.config['SQLALCHEMY_DATABASE_URI'] = _database_url
 app.config['SECRET_KEY'] = _require_env('SECRET_KEY')
 db = SQLAlchemy(app)
 
