@@ -14,10 +14,15 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
+      # reborn-db가 region 미지정으로 기본값(oregon)에 생성됐는데 이 웹 서비스는
+      # singapore라 리전이 갈렸다. Render의 내부 커넥션 문자열(호스트명이
+      # "dpg-...-a"뿐인 짧은 형태)은 같은 리전 사설망 안에서만 DNS가 풀려서,
+      # fromDatabase로 자동 주입하면 "Name or service not known"으로 매번 실패한다
+      # (2026-09 실배포 로그로 확인). 리전 상관없이 풀리는 External Database URL을
+      # Render 대시보드(reborn-db → External Database URL)에서 복사해 여기 값을
+      # 수동으로 넣어야 한다 — sync: false라 이 파일엔 실제 값을 안 적는다.
       - key: DATABASE_URL
-        fromDatabase:
-          name: reborn-db
-          property: connectionString
+        sync: false
       - key: SECRET_KEY
         generateValue: true
       # 아래는 대시보드에서 직접 값을 채워야 함 (sync: false = 이 파일에 값을 안 적음,
