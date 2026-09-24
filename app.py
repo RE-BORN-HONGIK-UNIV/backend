@@ -7,7 +7,7 @@ Re-born 보이스 터치 - Flask 백엔드 (최종 버전)
 
 import os
 from dotenv import load_dotenv
-load_dotenv()  # .env 파일 읽어서 환경변수로 등록
+load_dotenv(encoding='utf-8')  # .env 파일 읽어서 환경변수로 등록
 
 import io
 import base64
@@ -38,7 +38,7 @@ from step3.tts import synthesize_speech
 
 try:
     from dotenv import load_dotenv
-    load_dotenv()  # .env 파일이 있으면 읽어옴 (없으면 그냥 넘어감 — python-dotenv는 선택 설치)
+    load_dotenv(encoding='utf-8')  # .env 파일이 있으면 읽어옴 (없으면 그냥 넘어감 — python-dotenv는 선택 설치)
 except ImportError:
     pass
 
