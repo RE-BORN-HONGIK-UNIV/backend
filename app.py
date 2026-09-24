@@ -860,6 +860,41 @@ def analyze_gaze_blink():
                     os.remove(p)
                 except:
                     pass
+
+
+@app.route('/analyze/gaze-blink/latest', methods=['GET'])
+def get_latest_gaze_blink():
+    """로그인한 유저의 가장 최근 2단계(표정·시선) 결과 — 새로 영상을 분석하지 않고
+    이미 저장된 값만 조회. 3단계(모의면접) 난이도 산정(combineAnxietyScore)에서
+    쓸 stage2Avg를 여기서 가져온다 — 영상 재분석 없이 DB에 저장된 점수만 읽음.
+    1단계는 아직 DB 테이블이 없어서(localProgress.ts 참고) 대응하는 GET이 없다 —
+    1단계도 DB로 옮겨지면 같은 /analyze/<stage>/latest 형태로 이름을 맞출 것."""
+    user = get_current_user()
+    if user is None:
+        return jsonify({'error': '로그인이 필요합니다'}), 401
+
+    row = (
+        Stage2Result.query
+        .filter_by(user_id=user.id)
+        .order_by(Stage2Result.created_at.desc())
+        .first()
+    )
+    if row is None:
+        return jsonify({'result': None})
+
+    overall_score = round((row.blink_score + row.gaze_score + row.expression_score) / 3, 1)
+
+    return jsonify({
+        'result': {
+            'at': row.created_at.isoformat(),
+            'blinkScore': row.blink_score,
+            'blinkStatus': row.blink_status,
+            'gazeScore': row.gaze_score,
+            'expressionScore': row.expression_score,
+            'expressionStatus': row.expression_status,
+            'overallScore': overall_score,
+        }
+    })
 # ▲▲▲ [추가 끝] ▲▲▲
 
 @app.route('/community/posts', methods=['GET'])
