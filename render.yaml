@@ -29,7 +29,13 @@ services:
       # Render Dashboard → Environment 탭에서 수동 입력)
       - key: ANTHROPIC_API_KEY
         sync: false
-      - key: ELEVENLABS_API_KEY
+      - key: TYPECAST_API_KEY
+        sync: false
+      - key: TYPECAST_VOICE_WARMUP
+        sync: false
+      - key: TYPECAST_VOICE_STANDARD
+        sync: false
+      - key: TYPECAST_VOICE_PRACTICE
         sync: false
 
 databases:

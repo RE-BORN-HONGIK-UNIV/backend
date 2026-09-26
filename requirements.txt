@@ -25,7 +25,7 @@ anthropic==0.69.0
 
 # step3 — 면접 질문 TTS (선택, 키 없으면 자동 폴백 — step3/tts.py가 ImportError도
 # 이미 감싸고 있어서 이 패키지가 없어도 서버는 뜨지만, 실제 TTS 기능을 쓰려면 필요)
-elevenlabs==1.9.0
+typecast-python==0.4.0
 
 # step2 — 표정·시선 (mediapipe가 opencv-python-headless와만 호환, GUI용 opencv-python과
 # 같이 깔면 충돌하니 절대 opencv-python을 따로 추가하지 말 것)
