@@ -793,7 +793,7 @@ def analyze():
 def get_latest_stage1():
     """로그인한 유저의 가장 최근 1단계(음성) 결과 — 이미 저장된 값만 조회.
     3단계(모의면접) 난이도 산정(combineAnxietyScore의 stage1Avg)과 ai-agent의 이력
-    조회에서 쓴다. /analyze/gaze-blink/latest와 같은 shape(`{'result': ... | None}`)."""
+    조회에서 쓴다. /analyze/stage2/latest와 같은 shape(`{'result': ... | None}`)."""
     user = get_current_user()
     if user is None:
         return jsonify({'error': '로그인이 필요합니다'}), 401
@@ -972,13 +972,16 @@ def save_live_gaze_blink():
     return jsonify({'previous': previous_entry})
 
 
+# 정식 이름은 1단계(/analyze/stage1/latest)와 맞춘 /analyze/stage2/latest.
+# /analyze/gaze-blink/latest는 이미 배포된 기존 이름이라 호환용 별칭으로 남겨둔다.
+@app.route('/analyze/stage2/latest', methods=['GET'])
 @app.route('/analyze/gaze-blink/latest', methods=['GET'])
-def get_latest_gaze_blink():
+def get_latest_stage2():
     """로그인한 유저의 가장 최근 2단계(표정·시선) 결과 — 새로 영상을 분석하지 않고
-    이미 저장된 값만 조회. 3단계(모의면접) 난이도 산정(combineAnxietyScore)에서
-    쓸 stage2Avg를 여기서 가져온다 — 영상 재분석 없이 DB에 저장된 점수만 읽음.
-    1단계는 아직 DB 테이블이 없어서(localProgress.ts 참고) 대응하는 GET이 없다 —
-    1단계도 DB로 옮겨지면 같은 /analyze/<stage>/latest 형태로 이름을 맞출 것."""
+    이미 저장된 값만 조회. 업로드(/analyze/gaze-blink)·실시간(/analyze/gaze-blink/live)
+    두 모드 결과가 같은 Stage2Result에 쌓이므로 구분 없이 가장 최근 것을 돌려준다.
+    3단계(모의면접) 난이도 산정과 ai-agent 이력 조회에서 쓴다. 1단계의
+    /analyze/stage1/latest와 같은 shape(`{'result': ... | None}`)."""
     user = get_current_user()
     if user is None:
         return jsonify({'error': '로그인이 필요합니다'}), 401
