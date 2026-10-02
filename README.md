@@ -51,7 +51,7 @@ render.yaml     Render Blueprint — 웹 서비스 + Postgres DB를 이 파일 �
 - **인증** — `POST /api/signup`, `POST /api/login`
 - **1단계(음성)** — `POST /analyze`(업로드 → 오각형 점수), `POST /analyze/feedback`(LLM 코칭 피드백, 실패 시 템플릿 폴백), `GET /analyze/stage1/latest`(저장된 최신 결과 조회 — 3단계 난이도 산정·ai-agent용, 로그인 필요)
 - **2단계(표정·시선)** — `POST /analyze/gaze-blink`(업로드 → 깜빡임·시선·표정 지표 + 하이라이트 클립), `POST /analyze/gaze-blink/live`(실시간 촬영 결과 요약 저장 — 영상 없이 숫자만, 저장 직전 기록을 `previous`로 반환), `GET /analyze/stage2/latest`(재분석 없이 최신 점수 조회 — 3단계 난이도 산정·ai-agent용, 로그인 필요)
-- **3단계(면접)** — `POST /interview/next-question`(tier + 기본/꼬리질문 `mode` 기반 질문 생성, 실패 시 고정 질문 폴백), `POST /interview/tts`(질문 텍스트 → 면접관(`tier`)별 음성), `POST /interview/transcribe`(답변 STT)
+- **3단계(면접)** — `POST /interview/next-question`(tier + 기본/꼬리질문 `mode` 기반 질문 생성, 로그인 시 최신 1·2단계 세부 점수로 질문 방식 조절, 실패 시 고정 질문 폴백), `POST /interview/tts`(질문 텍스트 → 면접관(`tier`)별 음성), `POST /interview/transcribe`(답변 STT)
 - **커뮤니티("이야기")** — `GET/POST /community/posts`, `GET/DELETE /community/posts/<id>`, `POST /community/posts/<id>/comments`
 - **기타** — `GET /health`
 

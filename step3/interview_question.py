@@ -101,6 +101,88 @@ FALLBACK_FOLLOW_UPS = {
 }
 
 
+# ── 1·2단계 세부 점수 → 질문 방식 조절 ─────────────────────────────────
+# 점수 "숫자"는 LLM에 넘기지 않고, 낮게 나온 항목에 맞는 "질문 방식 지침"만 넘긴다.
+# 숫자나 약점 이름이 프롬프트에 없으면 LLM이 그걸 사용자에게 말해버릴 여지가 구조적으로 줄고
+# (발화·사회불안 사용자에게 "채움말이 많으시네요" 같은 말은 상처가 될 수 있음),
+# 프롬프트에도 "절대 언급하지 않는다"는 규칙을 한 번 더 넣는다.
+#
+# 기준: 점수는 모두 0~100, 높을수록 안정적. WEAK_BELOW 미만이면 "약한 항목"으로 보는데,
+# 70은 프론트 getTier()가 "실전 난이도(안정적)"로 넘어가는 경계와 같은 값이라 의미를 맞춘 것.
+# 정확도 검증으로 정한 임계값이 아니라 난이도 경계를 재사용한 휴리스틱이므로, 바꿀 땐 실제
+# 사용자 질문을 보고 조정할 것. 항목이 많이 약해도 질문이 과해지지 않게 가장 낮은 2개만 반영.
+WEAK_BELOW = 70
+MAX_WEAK_AXES = 2
+
+# (축 키, 상태 설명, 질문 방식 지침) — 1단계(음성) 5축, 2단계(표정·시선) 3축
+_AXIS_GUIDANCE = {
+    "stability": (
+        "목소리가 떨리기 쉬운 편",
+        "짧고 부담 없는 질문으로, 답을 천천히 시작해도 괜찮은 분위기를 줍니다.",
+    ),
+    "fluency": (
+        "말 사이에 군더더기가 늘기 쉬운 편",
+        "한 번에 한 가지만 묻고, 한두 문장으로 정리해 답할 수 있는 질문을 합니다.",
+    ),
+    "pause_ctrl": (
+        "말 도중 길게 멈추기 쉬운 편",
+        "질문을 여러 개로 쪼개지 말고 하나만 묻고, 생각할 시간이 충분하다고 느끼게 묻습니다.",
+    ),
+    "continuity": (
+        "소리가 늘어지거나 끊기기 쉬운 편",
+        "답이 구체적인 사실 하나로 모이는, 범위가 좁은 질문을 합니다.",
+    ),
+    "calm": (
+        "말의 힘이 오르내리기 쉬운 편",
+        "편안하게 이야기하듯 답할 수 있는 질문을 합니다.",
+    ),
+    # 표정·시선은 질문 내용으로 바꿀 수 있는 게 거의 없어서, 어투와 부담을 낮추는 정도로만 반영
+    "blink": (
+        "긴장이 눈 깜빡임에 드러나기 쉬운 편",
+        "질문을 짧고 친근한 어투로, 압박 없이 던집니다.",
+    ),
+    "gaze": (
+        "시선을 유지하기 어려운 편",
+        "질문을 짧고 친근한 어투로, 압박 없이 던집니다.",
+    ),
+    "expression": (
+        "표정이 굳기 쉬운 편",
+        "질문을 짧고 친근한 어투로, 압박 없이 던집니다.",
+    ),
+}
+
+
+def _weak_axes(profile: dict | None) -> list[str]:
+    """profile에서 WEAK_BELOW 미만인 항목을 낮은 점수 순으로 최대 MAX_WEAK_AXES개.
+
+    profile 형태: {"stage1": {축: 점수, ...} | None, "stage2": {축: 점수, ...} | None}
+    (알 수 없는 키·숫자가 아닌 값은 무시 — 서버 DB 값이라 신뢰하지만 프롬프트가 깨지면 안 됨)
+    """
+    if not profile:
+        return []
+    scored: list[tuple[float, str]] = []
+    for stage in ("stage1", "stage2"):
+        for axis, v in (profile.get(stage) or {}).items():
+            if axis in _AXIS_GUIDANCE and isinstance(v, (int, float)) and not isinstance(v, bool) and v < WEAK_BELOW:
+                scored.append((float(v), axis))
+    scored.sort(key=lambda t: t[0])
+    return [axis for _, axis in scored[:MAX_WEAK_AXES]]
+
+
+def _profile_section(profile: dict | None) -> str:
+    """프롬프트에 붙일 "질문 방식 조절" 섹션. 약한 항목이 없으면 빈 문자열."""
+    axes = _weak_axes(profile)
+    if not axes:
+        return ""
+    lines = "\n".join(f"- {_AXIS_GUIDANCE[a][0]}: {_AXIS_GUIDANCE[a][1]}" for a in axes)
+    return (
+        "[질문 방식 참고 — 이 사용자가 긴장을 보이기 쉬운 부분]\n"
+        f"{lines}\n"
+        "위 내용은 질문의 방식과 부담을 조절하는 데만 참고합니다. "
+        "분석 결과, 점수, 약한 부분을 질문이나 말투에서 절대 언급하지 않습니다.\n\n"
+    )
+
+
 def _fallback_question(tier: str, previous_questions: list[str], mode: str) -> str:
     if mode == "follow_up":
         return random.choice(FALLBACK_FOLLOW_UPS.get(tier, FALLBACK_FOLLOW_UPS["standard"]))
@@ -120,6 +202,7 @@ def _user_prompt(
     previous_questions: list[str],
     previous_answer: str | None,
     mode: str,
+    profile: dict | None = None,
 ) -> str:
     instr = TIER_INSTRUCTIONS.get(tier, TIER_INSTRUCTIONS["standard"])
     asked = "\n".join(f"- {q}" for q in previous_questions) if previous_questions else "(아직 없음)"
@@ -142,6 +225,7 @@ def _user_prompt(
     return (
         f"{instr}\n\n"
         f"[이미 나온 질문]\n{asked}\n\n"
+        f"{_profile_section(profile)}"
         f"{task}\n\n"
         "다음 질문을 1개만 생성해주세요."
     )
@@ -153,8 +237,11 @@ def generate_question(
     previous_answer: str | None = None,
     mode: str = "main",
     timeout: float = 15.0,
+    profile: dict | None = None,
 ) -> tuple[str, str]:
-    """(질문, source) 반환. source는 'llm' 또는 'fallback'."""
+    """(질문, source) 반환. source는 'llm' 또는 'fallback'.
+    profile: 1·2단계 세부 점수(_weak_axes 참고) — 약한 항목에 맞춰 질문 방식만 조절한다.
+    LLM을 못 쓰는 폴백 경로에서는 고정 질문이라 반영되지 않는다."""
     previous_questions = previous_questions or []
 
     # 꼬리질문인데 답변 텍스트가 없으면(인식 실패 등) 파고들 내용이 없으므로 기본 꼬리질문으로
@@ -176,7 +263,7 @@ def generate_question(
             }],
             messages=[{
                 "role": "user",
-                "content": _user_prompt(tier, previous_questions, previous_answer, mode),
+                "content": _user_prompt(tier, previous_questions, previous_answer, mode, profile),
             }],
         )
         text = "".join(b.text for b in resp.content if b.type == "text").strip()

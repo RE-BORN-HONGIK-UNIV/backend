@@ -1103,6 +1103,31 @@ def analyze_feedback():
     return jsonify({'feedback': text, 'source': 'llm' if text else 'template'})
 
 
+def _load_score_profile(user):
+    """로그인한 유저의 최신 1·2단계 세부 점수 → 질문 방식 조절용 profile (step3.interview_question).
+    비로그인이거나 기록이 없거나 DB 조회가 실패하면 해당 부분은 None — 질문 생성이 이것 때문에
+    실패하면 안 되므로 예외는 삼키고 로그만 남긴다 (profile 없이도 질문은 정상 생성됨)."""
+    if user is None:
+        return None
+    try:
+        s1 = (Stage1Result.query.filter_by(user_id=user.id)
+              .order_by(Stage1Result.created_at.desc()).first())
+        s2 = (Stage2Result.query.filter_by(user_id=user.id)
+              .order_by(Stage2Result.created_at.desc()).first())
+        return {
+            'stage1': None if s1 is None else {
+                'stability': s1.stability, 'fluency': s1.fluency, 'pause_ctrl': s1.pause_ctrl,
+                'continuity': s1.continuity, 'calm': s1.calm,
+            },
+            'stage2': None if s2 is None else {
+                'blink': s2.blink_score, 'gaze': s2.gaze_score, 'expression': s2.expression_score,
+            },
+        }
+    except Exception as e:
+        print(f"[WARNING] 점수 profile 조회 실패, 없이 진행: {e}")
+        return None
+
+
 @app.route('/interview/next-question', methods=['POST'])
 def interview_next_question():
     """Step 3 · 다음 면접 질문 생성.
@@ -1112,6 +1137,8 @@ def interview_next_question():
       "previous_questions": [str, ...],
       "previous_answer": str (선택 — 유저가 확인·수정한 방금 답변 텍스트)
     }
+    로그인(Authorization 헤더)이 있으면 그 유저의 최신 1·2단계 세부 점수로 질문 방식을
+    조절한다 (선택 — 비로그인이거나 기록이 없으면 tier만으로 생성).
     """
     data = request.get_json(silent=True) or {}
     tier = data.get('tier', 'standard')
@@ -1124,7 +1151,8 @@ def interview_next_question():
     if mode not in ('main', 'follow_up'):
         return jsonify({'error': "mode는 'main' | 'follow_up' 중 하나여야 합니다"}), 400
 
-    question, source = generate_question(tier, previous_questions, previous_answer, mode)
+    profile = _load_score_profile(get_current_user())
+    question, source = generate_question(tier, previous_questions, previous_answer, mode, profile=profile)
     return jsonify({'question': question, 'source': source})
 
 
