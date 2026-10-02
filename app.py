@@ -972,10 +972,7 @@ def save_live_gaze_blink():
     return jsonify({'previous': previous_entry})
 
 
-# 정식 이름은 1단계(/analyze/stage1/latest)와 맞춘 /analyze/stage2/latest.
-# /analyze/gaze-blink/latest는 이미 배포된 기존 이름이라 호환용 별칭으로 남겨둔다.
 @app.route('/analyze/stage2/latest', methods=['GET'])
-@app.route('/analyze/gaze-blink/latest', methods=['GET'])
 def get_latest_stage2():
     """로그인한 유저의 가장 최근 2단계(표정·시선) 결과 — 새로 영상을 분석하지 않고
     이미 저장된 값만 조회. 업로드(/analyze/gaze-blink)·실시간(/analyze/gaze-blink/live)
