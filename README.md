@@ -40,7 +40,7 @@ step1/          음성 분석 — analyze_filler_final.py(채움말), inference_
 step2/          표정·시선 — *_analyzer.py(blink/gaze/expression), scoring.py, set_baseline.py,
                 landmark_face_points.py(랜드마크 인덱스 + MediaPipe 세션 초기화)
                 ACCURACY_NOTES.md — 임계값 근거·검증 이력(문헌 인용 + 실측 검증)
-coach/          면접 직후 코치 노트 에이전트 — 순수 로직(schema·safety·missions·tools)과 LLM 루프(agent.py)
+coach/          면접 직후 코치 노트 에이전트 — 순수 로직(schema·safety·missions·tools)과 LLM 루프(agent.py), 맞춤 연습 힌트(practice.py)
                 일상 미션(missions.py)은 초안, 전문가 검토 전 확정 금지
 step3/          면접 질문(interview_question.py) · TTS(tts.py, Typecast)
 tests/          유닛테스트(pytest) + tests/labeling/(정확도 검증 하네스, 수동)
@@ -53,7 +53,7 @@ render.yaml     Render Blueprint — 웹 서비스 + Postgres DB를 이 파일 �
 - **인증** — `POST /api/signup`, `POST /api/login`
 - **1단계(음성)** — `POST /analyze`(업로드 → 오각형 점수), `POST /analyze/feedback`(LLM 코칭 피드백, 실패 시 템플릿 폴백), `GET /analyze/stage1/latest`(저장된 최신 결과 조회 — 3단계 난이도 산정·ai-agent용, 로그인 필요)
 - **2단계(표정·시선)** — `POST /analyze/gaze-blink`(업로드 → 깜빡임·시선·표정 지표 + 하이라이트 클립), `POST /analyze/gaze-blink/live`(실시간 촬영 결과 요약 저장 — 영상 없이 숫자만, 저장 직전 기록을 `previous`로 반환), `GET /analyze/stage2/latest`(재분석 없이 최신 점수 조회 — 3단계 난이도 산정·ai-agent용, 로그인 필요)
-- **3단계(면접)** — `POST /interview/next-question`(tier + 기본/꼬리질문 `mode` 기반 질문 생성, 로그인 시 최신 1·2단계 세부 점수로 질문 방식 조절 + 지난 면접의 기본 질문과 겹치지 않게, 실패 시 고정 질문 폴백), `POST /interview/tts`(질문 텍스트 → 면접관(`tier`)별 음성), `POST /interview/transcribe`(답변 STT), **면접 기록(로그인 필요, 본인만)** — `POST /interview/sessions`(시작), `POST /interview/sessions/<id>/turns`(질문 저장), `PUT /interview/sessions/<id>/turns/<turn_id>/answer`(답변 텍스트 저장), `POST /interview/sessions/<id>/complete`(완료), `GET /interview/sessions`(목록), `GET /interview/sessions/<id>`(질문·답변 상세), `DELETE /interview/sessions/<id>`(삭제), `POST /interview/sessions/<id>/coach-note`(면접 직후 코치 노트 — 이미 있으면 그대로, 없으면 에이전트가 생성해 저장)
+- **3단계(면접)** — `POST /interview/next-question`(tier + 기본/꼬리질문 `mode` 기반 질문 생성, 로그인 시 최신 1·2단계 세부 점수로 질문 방식 조절 + 지난 면접의 기본 질문과 겹치지 않게, 실패 시 고정 질문 폴백), `POST /interview/tts`(질문 텍스트 → 면접관(`tier`)별 음성), `POST /interview/transcribe`(답변 STT), **면접 기록(로그인 필요, 본인만)** — `POST /interview/sessions`(시작), `POST /interview/sessions/<id>/turns`(질문 저장), `PUT /interview/sessions/<id>/turns/<turn_id>/answer`(답변 텍스트 저장), `POST /interview/sessions/<id>/complete`(완료), `GET /interview/sessions`(목록), `GET /interview/sessions/<id>`(질문·답변 상세), `DELETE /interview/sessions/<id>`(삭제), `POST /interview/sessions/<id>/coach-note`(면접 직후 코치 노트 — 이미 있으면 그대로, 없으면 에이전트가 생성해 저장), `POST /interview/practice-hint`(맞춤 연습의 힌트 — 질문 하나를 다시 답할 때의 시작 문장 틀·말하는 순서, 로그인 필요·사용자당 시간당 20회 제한, AI 실패 시 일반 힌트)
 - **커뮤니티("이야기")** — `GET/POST /community/posts`, `GET/DELETE /community/posts/<id>`, `POST /community/posts/<id>/comments`
 - **기타** — `GET /health`
 

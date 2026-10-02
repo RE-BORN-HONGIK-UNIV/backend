@@ -20,7 +20,7 @@ step1/          음성 분석 — analyze_filler_final.py(채움말), inference_
 step2/          표정·시선 — *_analyzer.py(blink/gaze/expression), scoring.py, set_baseline.py
                 smile_cascade.py — OpenCV Haar Cascade 미소 검출 시도, 인물 간 일반화 실패로 폐기(기록용 보존)
                 ACCURACY_NOTES.md — 임계값 근거·검증 이력 (문헌 인용 + 실측 검증)
-coach/          면접 직후 코치 노트 에이전트(도구 조회 + 검증 + 대체 노트) — 일상 미션은 초안(전문가 검토 필요)
+coach/          면접 직후 코치 노트 에이전트(도구 조회 + 검증 + 대체 노트) · 맞춤 연습 힌트(practice.py) — 일상 미션은 초안(전문가 검토 필요)
 step3/          면접 질문(interview_question.py) · TTS(tts.py)
 tests/          유닛테스트(pytest) + tests/labeling/(정확도 검증 하네스, 수동)
 docs/           DB_DESIGN.md, TESTING.md(테스트 하네스 계층 설계)

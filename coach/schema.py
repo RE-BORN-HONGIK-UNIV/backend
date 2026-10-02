@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 
 from coach.missions import pick_mission
+from coach.practice import pick_practice_turn
 from coach.safety import has_banned_term
 
 KINDS = ("again", "light_practice", "daily_mission", "rest")
@@ -60,6 +61,25 @@ def weakest_stage_path(stage_scores: dict) -> str:
     return lowest[1] if lowest else "/voice"
 
 
+def _practice_card(facts: dict) -> dict:
+    """'연습' 카드. 방금 면접에서 한 번 더 답해볼 질문이 있으면 맞춤 연습 화면(그 질문을 힌트와 함께 다시 답하기)으로,
+    없으면(질문이 하나도 없는 비정상 면접) 예전처럼 1·2단계 연습 화면으로 보낸다. 점수나 약한 부분의 이름은 문구에 넣지 않는다."""
+    idx = pick_practice_turn(facts["session"].get("turns", []))
+    if idx is not None:
+        return {
+            "kind": "light_practice",
+            "title": "이 질문 다시 답해보기",
+            "body": "방금 질문 하나를 힌트와 함께 한 번 더 답해봐요. 천천히, 편하게요.",
+            "practiceTurn": idx,  # 프론트가 면접 중 메모리에 모아둔 질문·답변에서 이 순번을 찾아 연습 화면에 넘긴다
+        }
+    return {
+        "kind": "light_practice",
+        "title": "가볍게 연습",
+        "body": "부담 없이 목소리나 표정으로 몸을 풀어봐요. 짧게 해도 충분해요.",
+        "path": weakest_stage_path(facts.get("stage_scores") or {}),
+    }
+
+
 def build_cards(facts: dict) -> list[dict]:
     """다음 한 걸음 카드 4장. 점수나 약한 부분의 이름은 카드 문구에 넣지 않는다(규정하는 말이 되므로)."""
     session = facts["session"]
@@ -69,12 +89,7 @@ def build_cards(facts: dict) -> list[dict]:
             "title": "한 번 더 해보기",
             "body": "방금 해본 흐름을 한 번 더 이어가 봐요. 면접관을 바꿔볼 수도 있어요.",
         },
-        {
-            "kind": "light_practice",
-            "title": "가볍게 연습",
-            "body": "부담 없이 목소리나 표정으로 몸을 풀어봐요. 짧게 해도 충분해요.",
-            "path": weakest_stage_path(facts.get("stage_scores") or {}),
-        },
+        _practice_card(facts),
         {
             "kind": "daily_mission",
             "title": "현실로 한 걸음",

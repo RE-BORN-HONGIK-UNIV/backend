@@ -68,6 +68,7 @@ from step3.interview_question import generate_question
 
 # 면접 직후 코치 노트 에이전트 (이력 조회 도구 + 검증 + 대체 노트)
 from coach.agent import MODEL as COACH_MODEL, generate_note as generate_coach_note
+from coach.practice import RateLimiter, generate_hint, parse_hint_request
 
 # Step3 면접 기록(세션·질문·답변) 요청 검증
 from step3.session_payload import (
@@ -1444,6 +1445,30 @@ def get_or_create_coach_note(session_id):
             raise
         return jsonify({'note': json.loads(row.content), 'source': row.source})
     return jsonify({'note': note, 'source': source})
+
+
+# 연습 힌트 요청 제한 — 요청마다 AI 비용이 들어서 사용자당 시간당 횟수를 막는다 (coach/practice.py 참고)
+_practice_limiter = RateLimiter()
+
+
+@app.route('/interview/practice-hint', methods=['POST'])
+def get_practice_hint():
+    """맞춤 연습 화면의 힌트: 방금 면접의 질문 하나를 다시 답할 때 쓸 '시작 문장 틀'과 '말하는 순서'.
+    body: { "question": str, "previous_answer": str (선택 — 이전 답변이 있으면 그걸 바탕으로 맞춤 힌트) }
+    응답: { "hint": {"opening": str, "steps": [str, ...]}, "source": "llm" | "fallback" }
+    AI를 못 쓰면 일반 힌트를 주므로 로그인·형식·횟수 제한 외에는 실패하지 않는다."""
+    user = get_current_user()
+    if user is None:
+        return jsonify({'error': '로그인이 필요합니다'}), 401
+    try:
+        question, previous_answer = parse_hint_request(request.get_json(silent=True))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    if not _practice_limiter.allow(user.id):
+        return jsonify({'error': '연습 힌트를 너무 많이 요청했어요. 잠시 뒤에 다시 시도해주세요.'}), 429
+
+    hint, source = generate_hint(question, previous_answer)
+    return jsonify({'hint': hint, 'source': source})
 
 
 @app.route('/interview/tts', methods=['POST'])
