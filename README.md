@@ -35,7 +35,7 @@ DB는 PostgreSQL(2026-09에 MySQL에서 이전 — Render가 매니지드 MySQL�
 
 ```
 app.py          Flask 라우트 전체 (인증, /analyze*, /community/*, /interview/*)
-step1/          음성 분석 — analyze_filler_final.py(채움말), inference_cnn_final.py(CNN),
+step1/          음성 분석 — analyze_filler.py(채움말)·analyze_pause.py(멈춤), inference_cnn_final.py(CNN),
                 llm_feedback.py(코칭 피드백 생성, 순수 함수는 _user_prompt)
 step2/          표정·시선 — *_analyzer.py(blink/gaze/expression), scoring.py, set_baseline.py,
                 landmark_face_points.py(랜드마크 인덱스 + MediaPipe 세션 초기화)

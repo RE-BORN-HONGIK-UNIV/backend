@@ -15,7 +15,7 @@ Flask + Flask-SQLAlchemy(MySQL) · torch/torchvision(CNN 추론) · whisper·lib
 
 ```
 app.py          Flask 라우트 전체 (인증, /analyze*, /community/*, /interview/*)
-step1/          음성 분석 — analyze_filler_final.py(채움말), inference_cnn_final.py(CNN),
+step1/          음성 분석 — analyze_filler.py(채움말)·analyze_pause.py(멈춤), inference_cnn_final.py(CNN),
                 llm_feedback.py(코칭 피드백 생성, 순수 함수는 _user_prompt)
 step2/          표정·시선 — *_analyzer.py(blink/gaze/expression), scoring.py, set_baseline.py
                 smile_cascade.py — OpenCV Haar Cascade 미소 검출 시도, 인물 간 일반화 실패로 폐기(기록용 보존)
