@@ -56,6 +56,9 @@ from step2.set_baseline import calibrate_baseline_ear, calibrate_baseline_gaze
 # Step1 LLM 코칭 피드백 (선택적 — 키 없으면 자동 폴백)
 from step1.llm_feedback import generate_feedback
 
+# Step1 종합 점수 (Stage1Result에 저장할 값 — 프론트 overallScore와 동일 공식)
+from step1.stage1_score import overall_score as stage1_overall_score
+
 # Step3 면접 질문 생성 (선택적 — 키 없으면 자동 폴백)
 from step3.interview_question import generate_question
 
@@ -99,6 +102,33 @@ class User(db.Model):
     birthdate = db.Column(db.String(10), nullable=True)
     terms_agreed = db.Column(db.Boolean, default=False, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+
+class Stage1Result(db.Model):
+    """1단계(음성) 분석 결과 — 3단계 면접 난이도 산정과 ai-agent의 이력 조회용으로 유저별 저장.
+    기존엔 프론트 localStorage(`rb.stage1.score`)에만 있어서 서버가 값을 알 방법이 없었다."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+    # 오각형 5축 점수 (0~100, 높을수록 안정적) — /analyze 응답의 scores와 동일 키
+    stability = db.Column(db.Float, nullable=False)
+    fluency = db.Column(db.Float, nullable=False)
+    pause_ctrl = db.Column(db.Float, nullable=False)
+    continuity = db.Column(db.Float, nullable=False)
+    calm = db.Column(db.Float, nullable=False)
+    overall_score = db.Column(db.Float, nullable=False)
+
+    def to_entry(self):
+        return {
+            'at': self.created_at.isoformat(),
+            'stability': self.stability,
+            'fluency': self.fluency,
+            'pauseCtrl': self.pause_ctrl,
+            'continuity': self.continuity,
+            'calm': self.calm,
+            'overallScore': self.overall_score,
+        }
 
 
 class Stage2Result(db.Model):
@@ -693,6 +723,27 @@ def analyze():
         pause_result = analyze_pause(tmp_path)
         pause_ctrl = pause_result['pause_score']
 
+        # 로그인한 유저의 결과만 저장 (3단계 난이도 산정용). 로그인 없이도 분석 자체는
+        # 되게 두고, 저장이 실패해도 분석 응답은 정상 반환한다 — 저장은 부가 기능.
+        # demo_mode(CNN 모델 없음)의 0점 더미 값은 난이도를 왜곡하니 저장하지 않는다.
+        user = get_current_user()
+        if user is not None and cnn_model is not None:
+            try:
+                scores_to_save = {
+                    'stability': stability, 'fluency': fluency, 'pause_ctrl': pause_ctrl,
+                    'continuity': continuity, 'calm': calm,
+                }
+                db.session.add(Stage1Result(
+                    user_id=user.id,
+                    overall_score=stage1_overall_score(scores_to_save),
+                    **scores_to_save,
+                ))
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+                import traceback
+                print(f"[WARNING] Stage1Result 저장 실패: {traceback.format_exc()}")
+
         return jsonify({
             'scores': {
                 'stability':  stability,
@@ -736,6 +787,24 @@ def analyze():
                 os.remove(tmp_path)
             except:
                 pass
+
+@app.route('/analyze/stage1/latest', methods=['GET'])
+def get_latest_stage1():
+    """로그인한 유저의 가장 최근 1단계(음성) 결과 — 이미 저장된 값만 조회.
+    3단계(모의면접) 난이도 산정(combineAnxietyScore의 stage1Avg)과 ai-agent의 이력
+    조회에서 쓴다. /analyze/gaze-blink/latest와 같은 shape(`{'result': ... | None}`)."""
+    user = get_current_user()
+    if user is None:
+        return jsonify({'error': '로그인이 필요합니다'}), 401
+
+    row = (
+        Stage1Result.query
+        .filter_by(user_id=user.id)
+        .order_by(Stage1Result.created_at.desc())
+        .first()
+    )
+    return jsonify({'result': row.to_entry() if row else None})
+
 
 # ▼▼▼ [추가] Step2 시선/깜빡임 분석 라우트 ▼▼▼
 @app.route('/analyze/gaze-blink', methods=['POST'])

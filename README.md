@@ -49,7 +49,7 @@ render.yaml     Render Blueprint — 웹 서비스 + Postgres DB를 이 파일 �
 ## API 엔드포인트
 
 - **인증** — `POST /api/signup`, `POST /api/login`
-- **1단계(음성)** — `POST /analyze`(업로드 → 오각형 점수), `POST /analyze/feedback`(LLM 코칭 피드백, 실패 시 템플릿 폴백)
+- **1단계(음성)** — `POST /analyze`(업로드 → 오각형 점수), `POST /analyze/feedback`(LLM 코칭 피드백, 실패 시 템플릿 폴백), `GET /analyze/stage1/latest`(저장된 최신 결과 조회 — 3단계 난이도 산정·ai-agent용, 로그인 필요)
 - **2단계(표정·시선)** — `POST /analyze/gaze-blink`(업로드 → 깜빡임·시선·표정 지표 + 하이라이트 클립), `GET /analyze/gaze-blink/latest`(재분석 없이 최신 점수 조회 — 3단계 난이도 산정용)
 - **3단계(면접)** — `POST /interview/next-question`(tier 기반 질문 생성, 실패 시 고정 질문 폴백), `POST /interview/tts`(질문 텍스트 → 음성), `POST /interview/transcribe`(답변 STT)
 - **커뮤니티("이야기")** — `GET/POST /community/posts`, `GET/DELETE /community/posts/<id>`, `POST /community/posts/<id>/comments`

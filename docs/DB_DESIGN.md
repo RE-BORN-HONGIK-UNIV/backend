@@ -41,9 +41,35 @@ MySQL(`reborn_db`) 하나를 쓰고, 마이그레이션 도구 없이 `db.create
 `avgFixationSec`, `smileRatio`, `tensionRatio`)로 그대로 변환해줌 — 프론트/백엔드
 간 타입 맞추려고 별도 변환 계층 안 둠.
 
-**1단계는 아직 DB 테이블 없음** — 여전히 localStorage(`localProgress.ts`)로
-관리. 스코프 밖이라 이번엔 안 건드림. 1단계도 다회차 기록이 필요해지면 같은
-패턴(`Stage1Result` 테이블)으로 옮기면 됨.
+### Stage1Result (2026-10 추가)
+1단계(음성) 분석 결과를 유저별로 쌓는다. 용도는 두 가지 — 3단계 모의면접 난이도
+산정(`GET /analyze/stage1/latest`)과 ai-agent의 세션 이력 조회. 기존엔 프론트
+localStorage(`rb.stage1.score`)에만 있어서 서버가 1단계 점수를 알 방법이 없었음.
+
+| 필드 | 타입 | 비고 |
+|---|---|---|
+| id | Integer, PK | |
+| user_id | Integer, FK → User.id | |
+| created_at | DateTime | |
+| stability | Float | 음성 안정성 (tremor 기반) |
+| fluency | Float | 발화 유창성 (채움말) |
+| pause_ctrl | Float | 침묵 조절력 (멈춤) |
+| continuity | Float | 발화 지속성 (prolongation 기반) |
+| calm | Float | 발화 에너지 (energy 기반) |
+| overall_score | Float | 위 5축 평균(반올림) — 프론트 `overallScore()`와 같은 공식 (`step1/stage1_score.py`) |
+
+`to_entry()`는 camelCase(`pauseCtrl`, `overallScore` 등)로 변환. 5축 점수는 모두 0~100,
+**높을수록 안정적**(불안도가 아님) — 3단계 `getTier()`에서 점수가 높을수록 실전
+난이도가 되는 것도 이 방향 전제.
+
+**저장 규칙 (`/analyze`)**: 인증은 선택 — 로그인 없이도 분석은 되지만 저장은 로그인
+유저만. CNN 모델이 없는 데모 모드(`demo_mode`)의 0점 더미 값은 난이도를 왜곡하므로
+저장하지 않음. 저장 실패는 로그만 남기고 분석 응답은 정상 반환(부가 기능이라 화면
+흐름을 막지 않음).
+
+**소급 불가**: 이 테이블이 생기기 전에 분석한 결과는 localStorage에만 있어서 DB로
+옮길 수 없음. 기존 유저는 1단계를 한 번 더 해야 `/analyze/stage1/latest`에 값이 생김
+(그 전엔 `result: null`).
 
 ## 인증 연동
 
