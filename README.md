@@ -12,7 +12,7 @@ blendshape 기반 규칙 판정) → **3단계** 모의 면접(LLM 질문 생성
 | 인증 | PyJWT(직접 서명/검증), `werkzeug.security`(비밀번호 해시) |
 | 1단계(음성) | librosa(채움말·멈춤) + torch/torchvision(CNN 불안도, CPU-only 빌드) + openai-whisper(STT) |
 | 2단계(표정·시선) | mediapipe(blendshape) + opencv-python-headless |
-| 3단계(면접) | Anthropic API(질문 생성, `claude-sonnet-5` 기본) + ElevenLabs(TTS) |
+| 3단계(면접) | Anthropic API(질문 생성, `claude-sonnet-5` 기본) + Typecast(TTS, 면접관별 음성) |
 | 배포 | Render(Blueprint, `render.yaml`) — gunicorn, 무료 티어(RAM ~512MB) 기준 workers=1 |
 
 ## 실행
@@ -40,7 +40,7 @@ step1/          음성 분석 — analyze_filler_final.py(채움말), inference_
 step2/          표정·시선 — *_analyzer.py(blink/gaze/expression), scoring.py, set_baseline.py,
                 landmark_face_points.py(랜드마크 인덱스 + MediaPipe 세션 초기화)
                 ACCURACY_NOTES.md — 임계값 근거·검증 이력(문헌 인용 + 실측 검증)
-step3/          면접 질문(interview_question.py) · TTS(tts.py, ElevenLabs)
+step3/          면접 질문(interview_question.py) · TTS(tts.py, Typecast)
 tests/          유닛테스트(pytest) + tests/labeling/(정확도 검증 하네스, 수동)
 docs/           DB_DESIGN.md, TESTING.md(테스트 하네스 계층 설계)
 render.yaml     Render Blueprint — 웹 서비스 + Postgres DB를 이 파일 하나로 생성
@@ -51,7 +51,7 @@ render.yaml     Render Blueprint — 웹 서비스 + Postgres DB를 이 파일 �
 - **인증** — `POST /api/signup`, `POST /api/login`
 - **1단계(음성)** — `POST /analyze`(업로드 → 오각형 점수), `POST /analyze/feedback`(LLM 코칭 피드백, 실패 시 템플릿 폴백), `GET /analyze/stage1/latest`(저장된 최신 결과 조회 — 3단계 난이도 산정·ai-agent용, 로그인 필요)
 - **2단계(표정·시선)** — `POST /analyze/gaze-blink`(업로드 → 깜빡임·시선·표정 지표 + 하이라이트 클립), `POST /analyze/gaze-blink/live`(실시간 촬영 결과 요약 저장 — 영상 없이 숫자만, 저장 직전 기록을 `previous`로 반환), `GET /analyze/stage2/latest`(재분석 없이 최신 점수 조회 — 3단계 난이도 산정·ai-agent용, 로그인 필요)
-- **3단계(면접)** — `POST /interview/next-question`(tier 기반 질문 생성, 실패 시 고정 질문 폴백), `POST /interview/tts`(질문 텍스트 → 음성), `POST /interview/transcribe`(답변 STT)
+- **3단계(면접)** — `POST /interview/next-question`(tier + 기본/꼬리질문 `mode` 기반 질문 생성, 실패 시 고정 질문 폴백), `POST /interview/tts`(질문 텍스트 → 면접관(`tier`)별 음성), `POST /interview/transcribe`(답변 STT)
 - **커뮤니티("이야기")** — `GET/POST /community/posts`, `GET/DELETE /community/posts/<id>`, `POST /community/posts/<id>/comments`
 - **기타** — `GET /health`
 
@@ -61,6 +61,9 @@ render.yaml     Render Blueprint — 웹 서비스 + Postgres DB를 이 파일 �
 - `SECRET_KEY` — JWT 서명 키, 예측 불가능한 임의 문자열. 필수
 - `ANTHROPIC_API_KEY` — 없으면 `step1/llm_feedback.py`·`step3/interview_question.py`가 자동으로 폴백(템플릿/고정 질문)
 - `FEEDBACK_MODEL` — 선택, 기본 `claude-sonnet-5`
+- `INTERVIEW_MODEL` — 선택, 3단계 질문 생성 모델 (기본 `claude-sonnet-5`)
+- `TYPECAST_API_KEY` — 3단계 면접관 음성(TTS). 없으면 음성 없이 진행(프론트가 폴백)
+- `TYPECAST_VOICE_WARMUP` / `TYPECAST_VOICE_STANDARD` / `TYPECAST_VOICE_PRACTICE` — 면접관별 음성 ID. 비어 있으면 standard 음성으로 대체, `TYPECAST_MODEL`은 선택(기본 `ssfm-v30`)
 - `MODEL_PATH` — 1단계 CNN 모델 가중치 파일 경로, 선택
 
 ## 테스트 — 3계층 (자세한 설계는 `docs/TESTING.md`)
