@@ -1,6 +1,6 @@
 # DB 설계 기록
 
-MySQL(`reborn_db`) 하나를 쓰고, 마이그레이션 도구 없이 `db.create_all()`로 없는
+PostgreSQL(Render, 2026-09에 MySQL에서 이전) 하나를 쓰고, 마이그레이션 도구 없이 `db.create_all()`로 없는
 테이블만 생성한다 (Flask-SQLAlchemy, `app.py`).
 
 ## 스키마
@@ -70,6 +70,42 @@ localStorage(`rb.stage1.score`)에만 있어서 서버가 1단계 점수를 알 
 **소급 불가**: 이 테이블이 생기기 전에 분석한 결과는 localStorage에만 있어서 DB로
 옮길 수 없음. 기존 유저는 1단계를 한 번 더 해야 `/analyze/stage1/latest`에 값이 생김
 (그 전엔 `result: null`).
+
+### InterviewSession / InterviewTurn (2026-10 추가)
+3단계 모의 면접의 기록. 결과 화면, 대시보드 완료 표시, ai-agent의 면접 이력 조회에 쓴다.
+
+**InterviewSession** — 면접 1회
+
+| 필드 | 타입 | 비고 |
+|---|---|---|
+| id | Integer, PK | |
+| user_id | Integer, FK → User.id | index |
+| tier | String(20) | warmup / standard / practice (면접관) |
+| started_at | DateTime | |
+| completed_at | DateTime, nullable | 끝까지 마치면 채움. 중간에 나가면 비어 있음 |
+
+**InterviewTurn** — 질문 1개 + 답변 텍스트 (세션에 속하며 세션 삭제 시 함께 삭제)
+
+| 필드 | 타입 | 비고 |
+|---|---|---|
+| id | Integer, PK | |
+| session_id | Integer, FK → InterviewSession.id | index |
+| order_index | Integer | 질문이 나온 순서(0부터) |
+| kind | String(20) | main(기본 질문) / follow_up(꼬리질문) |
+| question | Text | |
+| answer | Text, nullable | 음성 인식 결과를 유저가 확인·수정한 텍스트. 아직 안 했으면 NULL, 건너뛰었으면 '' |
+| created_at | DateTime | 질문이 나온 시각 |
+| answered_at | DateTime, nullable | |
+
+**저장 시점**: 질문이 화면에 뜰 때 질문 저장 → 답변이 확정될 때 답변 저장 → 마지막에 완료 처리.
+그래서 중간에 나가도 그때까지의 기록이 남는다. 프론트는 저장이 실패해도 면접을 막지 않는다.
+
+**답변 텍스트는 민감한 개인정보가 될 수 있다** (발화·사회불안 청년이 한 말). 그래서:
+- **본인만** 조회·수정·삭제 가능. 남의 세션은 403이 아니라 404로 응답해 존재 여부도 숨긴다.
+- **삭제 API**(`DELETE /interview/sessions/<id>`)로 질문·답변이 함께 지워진다.
+- **영상·음성 파일은 저장하지 않는다** — 텍스트만.
+- 길이 상한(질문 1000자, 답변 5000자, 한 면접 30질문)을 서버에서 검증 (`step3/session_payload.py`).
+- 로그에 답변 내용을 남기지 않는다.
 
 ## 인증 연동
 

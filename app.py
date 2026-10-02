@@ -64,6 +64,11 @@ from step1.stage1_score import overall_score as stage1_overall_score
 # Step3 면접 질문 생성 (선택적 — 키 없으면 자동 폴백)
 from step3.interview_question import generate_question
 
+# Step3 면접 기록(세션·질문·답변) 요청 검증
+from step3.session_payload import (
+    MAX_TURNS_PER_SESSION, parse_answer, parse_session_start, parse_turn,
+)
+
 # whisper 모듈 자체는 load_models() 안에서 지연 import. 그 전까지는 "아직 모른다"가
 # 아니라 "안 붙어있다"로 취급 — analyze_filler()/interview_transcribe()가 load_models()
 # 호출 전에 이 값을 참조할 일은 없지만(두 라우트 모두 진입 시점에 load_models()를 먼저
@@ -160,6 +165,59 @@ class Stage2Result(db.Model):
             "avgFixationSec": self.avg_fixation_sec,
             "smileRatio": self.smile_ratio,
             "tensionRatio": self.tension_ratio,
+        }
+
+
+class InterviewSession(db.Model):
+    """3단계 모의 면접 1회. 질문이 나올 때마다 InterviewTurn이 쌓이고, 끝까지 마치면 completed_at이
+    채워진다 — 중간에 나가도 그때까지의 기록은 남음(completed_at이 비어 있는 채로).
+    용도: 결과 화면, 대시보드 완료 표시, ai-agent의 면접 이력 조회."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    tier = db.Column(db.String(20), nullable=False)  # warmup / standard / practice (면접관)
+    started_at = db.Column(db.DateTime, default=datetime.datetime.utcnow, nullable=False)
+    completed_at = db.Column(db.DateTime, nullable=True)
+
+    # 세션을 지우면 질문/답변도 함께 지워진다 (삭제 API = 본인 답변 텍스트 삭제 수단)
+    turns = db.relationship(
+        'InterviewTurn', backref='session', cascade='all, delete-orphan',
+        order_by='InterviewTurn.order_index',
+    )
+
+    def to_summary(self):
+        return {
+            'id': self.id,
+            'tier': self.tier,
+            'startedAt': self.started_at.isoformat(),
+            'completedAt': self.completed_at.isoformat() if self.completed_at else None,
+            'turnCount': len(self.turns),
+        }
+
+    def to_detail(self):
+        return {**self.to_summary(), 'turns': [t.to_entry() for t in self.turns]}
+
+
+class InterviewTurn(db.Model):
+    """면접 중 질문 1개와 그에 대한 답변 텍스트(음성 인식 결과를 유저가 확인·수정한 값).
+    영상·음성 파일은 저장하지 않는다 — 텍스트만. 답변을 아직 안 했거나 건너뛰면 answer는 None/''."""
+    id = db.Column(db.Integer, primary_key=True)
+    session_id = db.Column(db.Integer, db.ForeignKey('interview_session.id'), nullable=False, index=True)
+    order_index = db.Column(db.Integer, nullable=False)  # 0부터, 질문이 나온 순서
+    kind = db.Column(db.String(20), nullable=False)      # main(기본 질문) / follow_up(꼬리질문)
+    question = db.Column(db.Text, nullable=False)
+    answer = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow, nullable=False)
+    answered_at = db.Column(db.DateTime, nullable=True)
+
+    def to_entry(self):
+        return {
+            'id': self.id,
+            'order': self.order_index,
+            'kind': self.kind,
+            'question': self.question,
+            'answer': self.answer,
+            'askedAt': self.created_at.isoformat(),
+            'answeredAt': self.answered_at.isoformat() if self.answered_at else None,
         }
 
 
@@ -1155,6 +1213,133 @@ def interview_next_question():
     profile = _load_score_profile(get_current_user())
     question, source = generate_question(tier, previous_questions, previous_answer, mode, profile=profile)
     return jsonify({'question': question, 'source': source})
+
+
+def _own_interview_session(user, session_id):
+    """로그인한 유저 본인의 면접 세션. 없거나 남의 것이면 None — 남의 세션 존재 여부도 숨기려고
+    403이 아니라 같은 404로 처리한다."""
+    return InterviewSession.query.filter_by(id=session_id, user_id=user.id).first()
+
+
+@app.route('/interview/sessions', methods=['POST'])
+def start_interview_session():
+    """면접 시작 — 세션을 만들고 id를 돌려준다. body: { "tier": "warmup" | "standard" | "practice" }"""
+    user = get_current_user()
+    if user is None:
+        return jsonify({'error': '로그인이 필요합니다'}), 401
+    try:
+        tier = parse_session_start(request.get_json(silent=True))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    session = InterviewSession(user_id=user.id, tier=tier)
+    db.session.add(session)
+    db.session.commit()
+    return jsonify({'id': session.id}), 201
+
+
+@app.route('/interview/sessions', methods=['GET'])
+def list_interview_sessions():
+    """내 면접 목록(최신순, 최대 20개) — 대시보드 완료 표시·결과 화면·ai-agent용. 질문/답변 본문은
+    빼고 요약만(상세는 /interview/sessions/<id>)."""
+    user = get_current_user()
+    if user is None:
+        return jsonify({'error': '로그인이 필요합니다'}), 401
+    rows = (
+        InterviewSession.query.filter_by(user_id=user.id)
+        .order_by(InterviewSession.started_at.desc(), InterviewSession.id.desc())
+        .limit(20).all()
+    )
+    return jsonify({'sessions': [r.to_summary() for r in rows]})
+
+
+@app.route('/interview/sessions/<int:session_id>', methods=['GET'])
+def get_interview_session(session_id):
+    """면접 1회의 상세 — 질문과 답변 텍스트 전체. 본인 것만."""
+    user = get_current_user()
+    if user is None:
+        return jsonify({'error': '로그인이 필요합니다'}), 401
+    session = _own_interview_session(user, session_id)
+    if session is None:
+        return jsonify({'error': '면접 기록을 찾을 수 없습니다'}), 404
+    return jsonify(session.to_detail())
+
+
+@app.route('/interview/sessions/<int:session_id>', methods=['DELETE'])
+def delete_interview_session(session_id):
+    """면접 기록 삭제 — 질문·답변 텍스트가 함께 지워진다. 본인 것만."""
+    user = get_current_user()
+    if user is None:
+        return jsonify({'error': '로그인이 필요합니다'}), 401
+    session = _own_interview_session(user, session_id)
+    if session is None:
+        return jsonify({'error': '면접 기록을 찾을 수 없습니다'}), 404
+    db.session.delete(session)
+    db.session.commit()
+    return jsonify({'message': '삭제했습니다'})
+
+
+@app.route('/interview/sessions/<int:session_id>/turns', methods=['POST'])
+def add_interview_turn(session_id):
+    """질문이 화면에 나올 때 호출 — 질문을 저장하고 turn id를 돌려준다.
+    body: { "kind": "main" | "follow_up", "question": str }"""
+    user = get_current_user()
+    if user is None:
+        return jsonify({'error': '로그인이 필요합니다'}), 401
+    session = _own_interview_session(user, session_id)
+    if session is None:
+        return jsonify({'error': '면접 기록을 찾을 수 없습니다'}), 404
+    try:
+        kind, question = parse_turn(request.get_json(silent=True))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    order = len(session.turns)
+    if order >= MAX_TURNS_PER_SESSION:
+        return jsonify({'error': f'한 면접에 저장할 수 있는 질문은 {MAX_TURNS_PER_SESSION}개까지입니다'}), 400
+
+    turn = InterviewTurn(session_id=session.id, order_index=order, kind=kind, question=question)
+    db.session.add(turn)
+    db.session.commit()
+    return jsonify({'id': turn.id, 'order': order}), 201
+
+
+@app.route('/interview/sessions/<int:session_id>/turns/<int:turn_id>/answer', methods=['PUT'])
+def save_interview_answer(session_id, turn_id):
+    """답변이 확정됐을 때 호출 — 답변 텍스트 저장(다시 호출하면 덮어씀). body: { "answer": str }"""
+    user = get_current_user()
+    if user is None:
+        return jsonify({'error': '로그인이 필요합니다'}), 401
+    session = _own_interview_session(user, session_id)
+    if session is None:
+        return jsonify({'error': '면접 기록을 찾을 수 없습니다'}), 404
+    turn = InterviewTurn.query.filter_by(id=turn_id, session_id=session.id).first()
+    if turn is None:
+        return jsonify({'error': '질문을 찾을 수 없습니다'}), 404
+    try:
+        answer = parse_answer(request.get_json(silent=True))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    turn.answer = answer
+    turn.answered_at = datetime.datetime.utcnow()
+    db.session.commit()
+    return jsonify({'message': '저장했습니다'})
+
+
+@app.route('/interview/sessions/<int:session_id>/complete', methods=['POST'])
+def complete_interview_session(session_id):
+    """면접을 끝까지 마쳤을 때 호출 — 완료 시각 기록. 여러 번 불러도 처음 시각을 유지한다(멱등)."""
+    user = get_current_user()
+    if user is None:
+        return jsonify({'error': '로그인이 필요합니다'}), 401
+    session = _own_interview_session(user, session_id)
+    if session is None:
+        return jsonify({'error': '면접 기록을 찾을 수 없습니다'}), 404
+    if session.completed_at is None:
+        session.completed_at = datetime.datetime.utcnow()
+        db.session.commit()
+    return jsonify(session.to_summary())
 
 
 @app.route('/interview/tts', methods=['POST'])
