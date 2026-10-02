@@ -91,6 +91,22 @@ localStorage(`rb.stage1.score`)에만 있어서 서버가 1단계 점수를 알 
    (`features/face/comparison.ts`, 로직 변경 없음 — 데이터 출처만 localStorage
    → API 응답으로 바뀜)
 
+## `/analyze/gaze-blink/live` 저장 흐름 (2026-10 추가)
+
+2단계 "실시간 촬영"은 영상이 서버로 오지 않고 브라우저(MediaPipe)가 계산한 숫자
+요약만 보낸다. 예전엔 이 결과가 프론트 localStorage에만 남아서 (1) 기기를 바꾸면
+이력이 사라지고 (2) 업로드 모드 이력과 따로 놀고 (3) 3단계 난이도·ai-agent가 못 읽었음.
+
+1. 인증 확인 (없으면 401)
+2. `step2/live_payload.parse_live_result`로 형식·범위 검증 (잘못되면 400)
+3. 저장 전에 직전 `Stage2Result`를 조회해 `previous`로 확보
+4. 같은 `Stage2Result`에 저장 → 업로드·실시간 이력이 **하나의 시계열**로 합쳐짐
+5. 응답 `{previous}` — 프론트가 "지난번 대비" 비교에 사용
+
+점수는 서버에서 재계산하지 않고 클라이언트 값을 저장한다 — 원본 프레임/세그먼트가
+서버에 없어서 재계산이 불가능하고, 값은 본인 이력에만 영향을 줘서 조작 이득이 없음.
+대신 범위·타입만 검증(NaN/Infinity/bool 거부).
+
 ## 비밀 관리
 
 - `DATABASE_URL`, `SECRET_KEY`를 코드 하드코딩 → 환경변수 필수로 전환

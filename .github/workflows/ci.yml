@@ -58,4 +58,4 @@ jobs:
           tests/test_expression_analyzer.py tests/test_gaze_analyzer.py
           tests/test_interview_question.py tests/test_llm_feedback.py
           tests/test_smile_cascade.py tests/test_set_baseline.py
-          tests/test_stage1_score.py -v
+          tests/test_stage1_score.py tests/test_live_payload.py -v

@@ -52,6 +52,7 @@ from step2.blink_analyzer import (
 from step2.expression_analyzer import compute_expression_series, summarize_expression, detect_expression_segments
 from step2.scoring import score_blink_rate, score_gaze_segments, score_expression
 from step2.set_baseline import calibrate_baseline_ear, calibrate_baseline_gaze
+from step2.live_payload import parse_live_result
 
 # Step1 LLM 코칭 피드백 (선택적 — 키 없으면 자동 폴백)
 from step1.llm_feedback import generate_feedback
@@ -929,6 +930,46 @@ def analyze_gaze_blink():
                     os.remove(p)
                 except:
                     pass
+
+
+@app.route('/analyze/gaze-blink/live', methods=['POST'])
+def save_live_gaze_blink():
+    """2단계 "실시간 촬영" 결과 저장. 영상은 서버로 오지 않고 브라우저(MediaPipe)가 계산한
+    숫자 요약만 JSON으로 받는다. 업로드 모드(/analyze/gaze-blink)와 같은 Stage2Result에
+    쌓아서, 3단계 난이도(/latest)·"지난번 대비" 비교·ai-agent 이력이 두 모드를 구분 없이
+    하나의 이력으로 본다. 응답의 previous는 /analyze/gaze-blink와 같은 의미(저장 직전 기록)."""
+    user = get_current_user()
+    if user is None:
+        return jsonify({'error': '로그인이 필요합니다'}), 401
+
+    try:
+        v = parse_live_result(request.get_json(silent=True))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    # 저장 전에 직전 기록을 먼저 조회 (방금 넣은 레코드가 previous로 잡히지 않게)
+    previous_row = (
+        Stage2Result.query
+        .filter_by(user_id=user.id)
+        .order_by(Stage2Result.created_at.desc())
+        .first()
+    )
+    previous_entry = previous_row.to_entry() if previous_row else None
+
+    db.session.add(Stage2Result(
+        user_id=user.id,
+        blink_rate_per_min=v['blinkRatePerMin'],
+        blink_status=v['blinkStatus'],
+        blink_score=v['blinkScore'],
+        avg_fixation_sec=v['avgFixationSec'],
+        gaze_score=v['gazeScore'],
+        smile_ratio=v['smileRatio'],
+        tension_ratio=v['tensionRatio'],
+        expression_score=v['expressionScore'],
+        expression_status=v['expressionStatus'],
+    ))
+    db.session.commit()
+    return jsonify({'previous': previous_entry})
 
 
 @app.route('/analyze/gaze-blink/latest', methods=['GET'])
