@@ -28,6 +28,7 @@ import datetime
 from flask_cors import CORS
 from PIL import Image
 from step3.tts import synthesize_speech
+from db_url import normalize_database_url
 
 # torch/torchvision, whisper, step2의 mediapipe·cv2 기반 모듈(landmark_face_points,
 # gaze_analyzer)은 여기서 import하지 않고 실제로 쓰는 함수 안에서 지연 import한다.
@@ -86,10 +87,10 @@ CORS(app)
 
 # Render가 주는 connectionString은 "postgres://" 스킴인데, SQLAlchemy 1.4+
 # (Flask-SQLAlchemy 3.x)는 이 스킴을 완전히 버려서 NoSuchModuleError로 죽는다.
-# psycopg2 드라이버가 여전히 처리 가능한 "postgresql://"로 바꿔서 넣어준다.
-_database_url = _require_env('DATABASE_URL')
-if _database_url.startswith('postgres://'):
-    _database_url = _database_url.replace('postgres://', 'postgresql://', 1)
+# 또 드라이버 없는 "postgresql://"은 SQLAlchemy 2.1부터 기본 드라이버가 psycopg(v3)로 바뀌어
+# psycopg2-binary만 설치한 이 프로젝트에선 ModuleNotFoundError가 난다 — 그래서 어느 스킴으로
+# 들어오든 드라이버를 psycopg2로 명시해서 넣는다 (db_url.py 참고).
+_database_url = normalize_database_url(_require_env('DATABASE_URL'))
 app.config['SQLALCHEMY_DATABASE_URI'] = _database_url
 app.config['SECRET_KEY'] = _require_env('SECRET_KEY')
 db = SQLAlchemy(app)
