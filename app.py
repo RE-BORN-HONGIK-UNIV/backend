@@ -1187,6 +1187,27 @@ def _load_score_profile(user):
         return None
 
 
+def _load_past_questions(user):
+    """로그인한 유저가 지난 면접들에서 받은 "기본 질문"(최근 순) — 이번 면접에서 겹치지 않게 하려고 질문
+    생성에 넘긴다. 꼬리질문과 답변 내용은 넘기지 않는다(질문 문장만). 비로그인이거나 조회가 실패하면
+    빈 목록 — 질문 생성이 이 부가 기능 때문에 실패하면 안 된다."""
+    if user is None:
+        return []
+    try:
+        rows = (
+            db.session.query(InterviewTurn.question)
+            .join(InterviewSession, InterviewTurn.session_id == InterviewSession.id)
+            .filter(InterviewSession.user_id == user.id, InterviewTurn.kind == 'main')
+            .order_by(InterviewTurn.created_at.desc(), InterviewTurn.id.desc())
+            .limit(60)  # 중복·자기소개를 걷어내고도 MAX_PAST_QUESTIONS개가 남도록 여유 있게 읽음
+            .all()
+        )
+        return [r[0] for r in rows]
+    except Exception as e:
+        print(f"[WARNING] 지난 면접 질문 조회 실패, 없이 진행: {e}")
+        return []
+
+
 @app.route('/interview/next-question', methods=['POST'])
 def interview_next_question():
     """Step 3 · 다음 면접 질문 생성.
@@ -1196,8 +1217,8 @@ def interview_next_question():
       "previous_questions": [str, ...],
       "previous_answer": str (선택 — 유저가 확인·수정한 방금 답변 텍스트)
     }
-    로그인(Authorization 헤더)이 있으면 그 유저의 최신 1·2단계 세부 점수로 질문 방식을
-    조절한다 (선택 — 비로그인이거나 기록이 없으면 tier만으로 생성).
+    로그인(Authorization 헤더)이 있으면 그 유저의 최신 1·2단계 세부 점수로 질문 방식을 조절하고,
+    지난 면접에서 했던 기본 질문과 겹치지 않게 한다 (선택 — 비로그인이거나 기록이 없으면 tier만으로 생성).
     """
     data = request.get_json(silent=True) or {}
     tier = data.get('tier', 'standard')
@@ -1210,8 +1231,12 @@ def interview_next_question():
     if mode not in ('main', 'follow_up'):
         return jsonify({'error': "mode는 'main' | 'follow_up' 중 하나여야 합니다"}), 400
 
-    profile = _load_score_profile(get_current_user())
-    question, source = generate_question(tier, previous_questions, previous_answer, mode, profile=profile)
+    user = get_current_user()
+    profile = _load_score_profile(user)
+    past_questions = _load_past_questions(user) if mode == 'main' else []  # 꼬리질문엔 불필요
+    question, source = generate_question(
+        tier, previous_questions, previous_answer, mode, profile=profile, past_questions=past_questions,
+    )
     return jsonify({'question': question, 'source': source})
 
 

@@ -183,7 +183,46 @@ def _profile_section(profile: dict | None) -> str:
     )
 
 
-def _fallback_question(tier: str, previous_questions: list[str], mode: str) -> str:
+# ── 지난 면접과 겹치지 않게 ─────────────────────────────────────────────
+# 같은 사람이 여러 번 연습해도 매번 새로운 질문을 받도록, 지난 면접에서 했던 "기본 질문"을 프롬프트에
+# 넣어 피하게 한다. 꼬리질문은 그때그때 답변에 따라 달라지는 질문이라 대상에서 뺀다(비슷한 꼬리질문이
+# 다시 나오는 건 자연스럽고, 막으면 오히려 답변을 못 파고든다). 답변 내용은 넘기지 않고 질문 문장만 넘긴다.
+# 개수는 프롬프트가 길어지지 않게 최근 것만 — 너무 많이 넘기면 LLM이 피할 주제를 못 찾아 질문이 어색해진다.
+MAX_PAST_QUESTIONS = 15
+
+
+def _past_to_avoid(past_questions: list[str] | None, previous_questions: list[str]) -> list[str]:
+    """지난 면접 질문 중 이번 프롬프트에 넣을 것: 이번 면접에서 이미 나온 것(별도 섹션으로 들어감)과
+    자기소개(첫 질문에서 이미 했고 공통 규칙으로 금지)는 빼고, 중복을 없애 최근 순으로 최대 MAX개."""
+    seen = set(previous_questions)
+    out: list[str] = []
+    for q in past_questions or []:
+        if q in seen or "자기소개" in q:
+            continue
+        seen.add(q)
+        out.append(q)
+        if len(out) >= MAX_PAST_QUESTIONS:
+            break
+    return out
+
+
+def _past_section(past_questions: list[str] | None, previous_questions: list[str], mode: str) -> str:
+    """프롬프트에 붙일 "지난 면접 질문" 섹션. 기본 질문 차례가 아니거나 피할 질문이 없으면 빈 문자열."""
+    if mode != "main":
+        return ""
+    avoid = _past_to_avoid(past_questions, previous_questions)
+    if not avoid:
+        return ""
+    lines = "\n".join(f"- {q}" for q in avoid)
+    return (
+        "[지난 면접에서 이미 했던 질문 — 이번에는 이와 겹치지 않는 새로운 주제로 질문합니다]\n"
+        f"{lines}\n\n"
+    )
+
+
+def _fallback_question(
+    tier: str, previous_questions: list[str], mode: str, past_questions: list[str] | None = None
+) -> str:
     if mode == "follow_up":
         return random.choice(FALLBACK_FOLLOW_UPS.get(tier, FALLBACK_FOLLOW_UPS["standard"]))
 
@@ -194,7 +233,9 @@ def _fallback_question(tier: str, previous_questions: list[str], mode: str) -> s
         remaining = [q for q in remaining if "자기소개" not in q]
     if not remaining:
         remaining = pool
-    return random.choice(remaining)
+    # 지난 면접에서 나온 적 없는 질문을 우선한다. 다 나왔던 거라면(고정 질문은 난이도당 3개뿐) 그냥 고른다.
+    fresh = [q for q in remaining if q not in (past_questions or [])]
+    return random.choice(fresh or remaining)
 
 
 def _user_prompt(
@@ -203,6 +244,7 @@ def _user_prompt(
     previous_answer: str | None,
     mode: str,
     profile: dict | None = None,
+    past_questions: list[str] | None = None,
 ) -> str:
     instr = TIER_INSTRUCTIONS.get(tier, TIER_INSTRUCTIONS["standard"])
     asked = "\n".join(f"- {q}" for q in previous_questions) if previous_questions else "(아직 없음)"
@@ -226,6 +268,7 @@ def _user_prompt(
         f"{instr}\n\n"
         f"[이미 나온 질문]\n{asked}\n\n"
         f"{_profile_section(profile)}"
+        f"{_past_section(past_questions, previous_questions, mode)}"
         f"{task}\n\n"
         "다음 질문을 1개만 생성해주세요."
     )
@@ -238,18 +281,20 @@ def generate_question(
     mode: str = "main",
     timeout: float = 15.0,
     profile: dict | None = None,
+    past_questions: list[str] | None = None,
 ) -> tuple[str, str]:
     """(질문, source) 반환. source는 'llm' 또는 'fallback'.
     profile: 1·2단계 세부 점수(_weak_axes 참고) — 약한 항목에 맞춰 질문 방식만 조절한다.
-    LLM을 못 쓰는 폴백 경로에서는 고정 질문이라 반영되지 않는다."""
+    past_questions: 지난 면접의 기본 질문(최근 순) — 겹치지 않는 새 주제로 묻게 한다. 폴백 경로에서는
+    고정 질문 중 지난번에 안 나온 것을 우선 고른다."""
     previous_questions = previous_questions or []
 
     # 꼬리질문인데 답변 텍스트가 없으면(인식 실패 등) 파고들 내용이 없으므로 기본 꼬리질문으로
     if mode == "follow_up" and not previous_answer:
-        return _fallback_question(tier, previous_questions, mode), "fallback"
+        return _fallback_question(tier, previous_questions, mode, past_questions), "fallback"
 
     if _client is None:
-        return _fallback_question(tier, previous_questions, mode), "fallback"
+        return _fallback_question(tier, previous_questions, mode, past_questions), "fallback"
 
     try:
         resp = _client.with_options(timeout=timeout).messages.create(
@@ -263,13 +308,13 @@ def generate_question(
             }],
             messages=[{
                 "role": "user",
-                "content": _user_prompt(tier, previous_questions, previous_answer, mode, profile),
+                "content": _user_prompt(tier, previous_questions, previous_answer, mode, profile, past_questions),
             }],
         )
         text = "".join(b.text for b in resp.content if b.type == "text").strip()
         if text:
             return text, "llm"
-        return _fallback_question(tier, previous_questions, mode), "fallback"
+        return _fallback_question(tier, previous_questions, mode, past_questions), "fallback"
     except Exception as e:  # 네트워크/키/쿼터 등 — 화면 흐름은 절대 안 깨지게
         log.warning("Step3 질문 생성 실패: %s", e)
-        return _fallback_question(tier, previous_questions, mode), "fallback"
+        return _fallback_question(tier, previous_questions, mode, past_questions), "fallback"

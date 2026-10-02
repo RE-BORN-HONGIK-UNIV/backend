@@ -7,9 +7,12 @@ from step3.interview_question import (
     FALLBACK_FOLLOW_UPS,
     FALLBACK_QUESTIONS,
     FOLLOW_UP_INSTRUCTIONS,
+    MAX_PAST_QUESTIONS,
     MAX_WEAK_AXES,
     WEAK_BELOW,
     _fallback_question,
+    _past_section,
+    _past_to_avoid,
     _profile_section,
     _user_prompt,
     _weak_axes,
@@ -154,3 +157,55 @@ def test_user_prompt_includes_profile_section_in_both_modes():
 def test_user_prompt_without_profile_is_unchanged():
     assert "질문 방식 참고" not in _user_prompt("standard", [], None, "main")
     assert _user_prompt("standard", [], None, "main") == _user_prompt("standard", [], None, "main", None)
+
+
+# ── 지난 면접과 겹치지 않게 ─────────────────────────────────────────────
+
+def test_past_section_lists_past_main_questions_in_main_mode():
+    section = _past_section(["강점이 뭔가요?", "실패 경험은요?"], [], "main")
+    assert "지난 면접에서 이미 했던 질문" in section
+    assert "- 강점이 뭔가요?" in section and "- 실패 경험은요?" in section
+
+
+def test_past_section_is_empty_for_follow_up_or_nothing_to_avoid():
+    # 꼬리질문은 답변에 따라 달라지는 질문이라 지난 질문을 피하게 하지 않는다
+    assert _past_section(["강점이 뭔가요?"], [], "follow_up") == ""
+    assert _past_section(None, [], "main") == ""
+    assert _past_section([], [], "main") == ""
+
+
+def test_past_to_avoid_drops_current_session_questions_and_self_intro_and_duplicates():
+    past = ["먼저 자기소개 부탁드려요", "강점이 뭔가요?", "강점이 뭔가요?", "이번 면접에서 이미 나온 질문", "실패 경험은요?"]
+    assert _past_to_avoid(past, ["이번 면접에서 이미 나온 질문"]) == ["강점이 뭔가요?", "실패 경험은요?"]
+
+
+def test_past_to_avoid_keeps_most_recent_first_and_caps_count():
+    past = [f"질문{i}" for i in range(MAX_PAST_QUESTIONS + 10)]  # 최근 순으로 들어온다고 가정
+    out = _past_to_avoid(past, [])
+    assert len(out) == MAX_PAST_QUESTIONS
+    assert out[0] == "질문0"  # 가장 최근 것부터 유지
+
+
+def test_user_prompt_includes_past_section_only_for_main_mode():
+    past = ["강점이 뭔가요?"]
+    assert "강점이 뭔가요?" in _user_prompt("standard", [], None, "main", None, past)
+    assert "강점이 뭔가요?" not in _user_prompt("standard", [], "답변", "follow_up", None, past)
+
+
+def test_user_prompt_never_receives_answers_only_question_text():
+    # 개인정보(답변)는 넘기지 않는다 — 지난 면접에서 넘기는 건 질문 문장뿐
+    prompt = _user_prompt("standard", [], None, "main", None, ["강점이 뭔가요?"])
+    assert "[지난 면접에서 이미 했던 질문" in prompt and "방금 사용자 답변" not in prompt
+
+
+def test_fallback_prefers_questions_not_asked_in_past_interviews():
+    pool = FALLBACK_QUESTIONS["standard"]
+    past = pool[:-1]  # 지난번에 3개 중 2개가 나왔음 → 안 나온 1개를 우선
+    for _ in range(20):
+        assert _fallback_question("standard", [], "main", past) == pool[-1]
+
+
+def test_fallback_still_works_when_every_fixed_question_was_asked_before():
+    # 고정 질문은 난이도당 3개뿐이라 지난 면접에서 다 나왔을 수 있다 — 그래도 질문은 나와야 한다
+    pool = FALLBACK_QUESTIONS["practice"]
+    assert _fallback_question("practice", [], "main", list(pool)) in pool
