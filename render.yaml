@@ -29,6 +29,9 @@ services:
       # Render Dashboard → Environment 탭에서 수동 입력)
       - key: ANTHROPIC_API_KEY
         sync: false
+      # 답변에서 위기 신호가 감지됐을 때 결과 화면에 보여줄 도움 안내(팀이 확정한 문구) — 비워도 서버는 뜸
+      - key: CARE_RESOURCES
+        sync: false
       - key: TYPECAST_API_KEY
         sync: false
       - key: TYPECAST_VOICE_WARMUP

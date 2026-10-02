@@ -107,6 +107,23 @@ localStorage(`rb.stage1.score`)에만 있어서 서버가 1단계 점수를 알 
 - 길이 상한(질문 1000자, 답변 5000자, 한 면접 30질문)을 서버에서 검증 (`step3/session_payload.py`).
 - 로그에 답변 내용을 남기지 않는다.
 
+### CoachNote (2026-10 추가)
+면접 직후 보여주는 **코치 노트** — 해낸 것, 내 말 중 좋았던 문장 인용, 다음 한 걸음 카드. `coach/` 에이전트가 만들고
+검증한 JSON을 면접 1회당 1개 저장한다(`session_id` unique) — 결과 화면을 다시 열어도 AI를 다시 부르지 않는다.
+
+| 필드 | 타입 | 비고 |
+|---|---|---|
+| id | Integer, PK | |
+| session_id | Integer, FK → InterviewSession.id, **unique** | 면접과 1:1 |
+| content | Text | 노트 JSON (`coach/schema.py` 형태) |
+| source | String(20) | `llm`(AI가 작성) / `fallback`(AI 못 쓸 때 대체 노트) / `care`(위기 신호 — 코칭 없이 돌봄 안내) |
+| model | String(60), nullable | source가 llm일 때만 |
+| created_at | DateTime | |
+
+**개인정보**: 노트에는 사용자의 답변에서 **글자 그대로 인용한 문장**이 들어가므로, 면접과 함께 삭제된다(cascade).
+AI(Anthropic)로는 **면접 답변 텍스트가 전송**된다 → 프론트 면접 시작 화면에서 동의를 받고, 동의하지 않으면 면접
+기록 자체를 만들지 않는다(= 세션이 존재하면 동의한 것). 위기 신호가 감지된 답변은 AI로 보내지 않는다.
+
 ## 인증 연동
 
 - 로그인(`/api/login`) 시 JWT 발급, payload에 `user_id` 포함, 7일 만료

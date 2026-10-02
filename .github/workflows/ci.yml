@@ -59,4 +59,4 @@ jobs:
           tests/test_interview_question.py tests/test_llm_feedback.py
           tests/test_smile_cascade.py tests/test_set_baseline.py
           tests/test_stage1_score.py tests/test_live_payload.py
-          tests/test_db_url.py tests/test_session_payload.py tests/test_llm_util.py -v
+          tests/test_db_url.py tests/test_session_payload.py tests/test_llm_util.py tests/test_coach.py -v

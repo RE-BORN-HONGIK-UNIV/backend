@@ -20,6 +20,7 @@ step1/          음성 분석 — analyze_filler_final.py(채움말), inference_
 step2/          표정·시선 — *_analyzer.py(blink/gaze/expression), scoring.py, set_baseline.py
                 smile_cascade.py — OpenCV Haar Cascade 미소 검출 시도, 인물 간 일반화 실패로 폐기(기록용 보존)
                 ACCURACY_NOTES.md — 임계값 근거·검증 이력 (문헌 인용 + 실측 검증)
+coach/          면접 직후 코치 노트 에이전트(도구 조회 + 검증 + 대체 노트) — 일상 미션은 초안(전문가 검토 필요)
 step3/          면접 질문(interview_question.py) · TTS(tts.py)
 tests/          유닛테스트(pytest) + tests/labeling/(정확도 검증 하네스, 수동)
 docs/           DB_DESIGN.md, TESTING.md(테스트 하네스 계층 설계)
@@ -74,4 +75,8 @@ python app.py
 - LLM 호출(`step1/llm_feedback.py`, `step3/interview_question.py`)은 항상 실패 시
   폴백이 있어야 한다(네트워크/키/쿼터 문제로 화면 흐름이 깨지면 안 됨) — `except Exception`
   으로 감싸고 로그만 남긴 뒤 폴백 반환하는 기존 패턴을 따른다.
+- LLM 호출에서 effort는 `llm_util.effort_options()`로 넘긴다 — `messages.create(output_config=...)`로 직접 넘기면
+  고정된 anthropic==0.69.0에서 TypeError가 나고 폴백에 삼켜져 AI가 안 쓰이는 걸 아무도 모르게 된다(실제로 겪음).
+- 면접 답변 텍스트는 민감정보 — 로그에 내용을 남기지 말고(예외 종류만), AI 출력은 검증을 거치며(인용은 원문 대조,
+  평가·진단 표현 금지), 위기 신호 답변은 AI로 보내지 않는다 (`coach/`).
 - 커밋 메시지는 한국어로, "무엇을"보다 "왜"(원인·근거·트레이드오프) 위주로 쓴다.

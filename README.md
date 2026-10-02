@@ -40,6 +40,8 @@ step1/          음성 분석 — analyze_filler_final.py(채움말), inference_
 step2/          표정·시선 — *_analyzer.py(blink/gaze/expression), scoring.py, set_baseline.py,
                 landmark_face_points.py(랜드마크 인덱스 + MediaPipe 세션 초기화)
                 ACCURACY_NOTES.md — 임계값 근거·검증 이력(문헌 인용 + 실측 검증)
+coach/          면접 직후 코치 노트 에이전트 — 순수 로직(schema·safety·missions·tools)과 LLM 루프(agent.py)
+                일상 미션(missions.py)은 초안, 전문가 검토 전 확정 금지
 step3/          면접 질문(interview_question.py) · TTS(tts.py, Typecast)
 tests/          유닛테스트(pytest) + tests/labeling/(정확도 검증 하네스, 수동)
 docs/           DB_DESIGN.md, TESTING.md(테스트 하네스 계층 설계)
@@ -51,7 +53,7 @@ render.yaml     Render Blueprint — 웹 서비스 + Postgres DB를 이 파일 �
 - **인증** — `POST /api/signup`, `POST /api/login`
 - **1단계(음성)** — `POST /analyze`(업로드 → 오각형 점수), `POST /analyze/feedback`(LLM 코칭 피드백, 실패 시 템플릿 폴백), `GET /analyze/stage1/latest`(저장된 최신 결과 조회 — 3단계 난이도 산정·ai-agent용, 로그인 필요)
 - **2단계(표정·시선)** — `POST /analyze/gaze-blink`(업로드 → 깜빡임·시선·표정 지표 + 하이라이트 클립), `POST /analyze/gaze-blink/live`(실시간 촬영 결과 요약 저장 — 영상 없이 숫자만, 저장 직전 기록을 `previous`로 반환), `GET /analyze/stage2/latest`(재분석 없이 최신 점수 조회 — 3단계 난이도 산정·ai-agent용, 로그인 필요)
-- **3단계(면접)** — `POST /interview/next-question`(tier + 기본/꼬리질문 `mode` 기반 질문 생성, 로그인 시 최신 1·2단계 세부 점수로 질문 방식 조절 + 지난 면접의 기본 질문과 겹치지 않게, 실패 시 고정 질문 폴백), `POST /interview/tts`(질문 텍스트 → 면접관(`tier`)별 음성), `POST /interview/transcribe`(답변 STT), **면접 기록(로그인 필요, 본인만)** — `POST /interview/sessions`(시작), `POST /interview/sessions/<id>/turns`(질문 저장), `PUT /interview/sessions/<id>/turns/<turn_id>/answer`(답변 텍스트 저장), `POST /interview/sessions/<id>/complete`(완료), `GET /interview/sessions`(목록), `GET /interview/sessions/<id>`(질문·답변 상세), `DELETE /interview/sessions/<id>`(삭제)
+- **3단계(면접)** — `POST /interview/next-question`(tier + 기본/꼬리질문 `mode` 기반 질문 생성, 로그인 시 최신 1·2단계 세부 점수로 질문 방식 조절 + 지난 면접의 기본 질문과 겹치지 않게, 실패 시 고정 질문 폴백), `POST /interview/tts`(질문 텍스트 → 면접관(`tier`)별 음성), `POST /interview/transcribe`(답변 STT), **면접 기록(로그인 필요, 본인만)** — `POST /interview/sessions`(시작), `POST /interview/sessions/<id>/turns`(질문 저장), `PUT /interview/sessions/<id>/turns/<turn_id>/answer`(답변 텍스트 저장), `POST /interview/sessions/<id>/complete`(완료), `GET /interview/sessions`(목록), `GET /interview/sessions/<id>`(질문·답변 상세), `DELETE /interview/sessions/<id>`(삭제), `POST /interview/sessions/<id>/coach-note`(면접 직후 코치 노트 — 이미 있으면 그대로, 없으면 에이전트가 생성해 저장)
 - **커뮤니티("이야기")** — `GET/POST /community/posts`, `GET/DELETE /community/posts/<id>`, `POST /community/posts/<id>/comments`
 - **기타** — `GET /health`
 
@@ -64,6 +66,8 @@ render.yaml     Render Blueprint — 웹 서비스 + Postgres DB를 이 파일 �
 - `INTERVIEW_MODEL` — 선택, 3단계 질문 생성 모델 (기본 `claude-sonnet-5`)
 - `TYPECAST_API_KEY` — 3단계 면접관 음성(TTS). 없으면 음성 없이 진행(프론트가 폴백)
 - `TYPECAST_VOICE_WARMUP` / `TYPECAST_VOICE_STANDARD` / `TYPECAST_VOICE_PRACTICE` — 면접관별 음성 ID. 비어 있으면 standard 음성으로 대체, `TYPECAST_MODEL`은 선택(기본 `ssfm-v30`)
+- `COACH_MODEL` — 선택, 면접 직후 코치 노트 에이전트 모델 (기본 `claude-sonnet-5`)
+- `CARE_RESOURCES` — 선택, 답변에서 위기 신호가 감지됐을 때 결과 화면에 보여줄 도움 안내 문구(기관·연락처). **팀이 확정한 내용만** 넣을 것 — 비어 있으면 일반적인 돌봄 문구만 나옴
 - `MODEL_PATH` — 1단계 CNN 모델 가중치 파일 경로, 선택
 
 ## 테스트 — 3계층 (자세한 설계는 `docs/TESTING.md`)

@@ -25,7 +25,9 @@ from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
 import datetime
+import json
 from flask_cors import CORS
+from sqlalchemy.exc import IntegrityError
 from PIL import Image
 from step3.tts import synthesize_speech
 from db_url import normalize_database_url
@@ -63,6 +65,9 @@ from step1.stage1_score import overall_score as stage1_overall_score
 
 # Step3 면접 질문 생성 (선택적 — 키 없으면 자동 폴백)
 from step3.interview_question import generate_question
+
+# 면접 직후 코치 노트 에이전트 (이력 조회 도구 + 검증 + 대체 노트)
+from coach.agent import MODEL as COACH_MODEL, generate_note as generate_coach_note
 
 # Step3 면접 기록(세션·질문·답변) 요청 검증
 from step3.session_payload import (
@@ -183,6 +188,8 @@ class InterviewSession(db.Model):
         'InterviewTurn', backref='session', cascade='all, delete-orphan',
         order_by='InterviewTurn.order_index',
     )
+    # 면접 직후 코치 노트(1:1). 노트에는 사용자의 답변에서 인용한 문장이 들어가므로 세션과 함께 삭제된다.
+    coach_note = db.relationship('CoachNote', backref='session', uselist=False, cascade='all, delete-orphan')
 
     def to_summary(self):
         return {
@@ -219,6 +226,17 @@ class InterviewTurn(db.Model):
             'askedAt': self.created_at.isoformat(),
             'answeredAt': self.answered_at.isoformat() if self.answered_at else None,
         }
+
+
+class CoachNote(db.Model):
+    """면접 직후 코치 노트 — 해낸 것·내 말 인용·다음 한 걸음 카드(coach/ 에이전트가 만들고 검증한 JSON).
+    면접 1회당 1개(session_id unique)라서 결과 화면을 다시 열어도 AI를 다시 부르지 않는다(비용·일관성)."""
+    id = db.Column(db.Integer, primary_key=True)
+    session_id = db.Column(db.Integer, db.ForeignKey('interview_session.id'), nullable=False, unique=True)
+    content = db.Column(db.Text, nullable=False)       # 노트 JSON (coach/schema.py 형태)
+    source = db.Column(db.String(20), nullable=False)  # llm / fallback / care
+    model = db.Column(db.String(60), nullable=True)    # source가 llm일 때만
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow, nullable=False)
 
 
 class Post(db.Model):
@@ -1365,6 +1383,67 @@ def complete_interview_session(session_id):
         session.completed_at = datetime.datetime.utcnow()
         db.session.commit()
     return jsonify(session.to_summary())
+
+
+def _build_coach_facts(user, session):
+    """코치 에이전트가 볼 사실들을 이 면접의 주인(user) 것만 모아 만든다 (coach/schema.py의 facts 형태).
+    에이전트 도구는 user_id를 인자로 받지 않고 이 facts만 들여다보므로, 다른 사용자 데이터는 구조적으로 못 본다."""
+    turns = [{'kind': t.kind, 'question': t.question, 'answer': t.answer or ''} for t in session.turns]
+    previous = (
+        InterviewSession.query
+        .filter(InterviewSession.user_id == user.id, InterviewSession.id != session.id,
+                InterviewSession.started_at <= session.started_at)
+        .order_by(InterviewSession.started_at.desc(), InterviewSession.id.desc())
+        .limit(5).all()
+    )
+    return {
+        'session': {'id': session.id, 'tier': session.tier, 'completed': session.completed_at is not None, 'turns': turns},
+        'previous_sessions': [
+            {
+                'id': p.id, 'tier': p.tier, 'completed': p.completed_at is not None,
+                'question_count': len(p.turns),
+                'answered_count': sum(1 for t in p.turns if (t.answer or '').strip()),
+            }
+            for p in previous
+        ],
+        'stage_scores': _load_score_profile(user) or {'stage1': None, 'stage2': None},
+    }
+
+
+@app.route('/interview/sessions/<int:session_id>/coach-note', methods=['POST'])
+def get_or_create_coach_note(session_id):
+    """면접 직후 코치 노트. 이미 만들어 둔 게 있으면 그대로 돌려주고(AI를 다시 부르지 않음), 없으면 에이전트가
+    만들어 저장한다. 에이전트는 항상 완성된 노트를 주므로(AI 실패 시 대체 노트) 이 API는 로그인·소유 확인
+    외에는 실패하지 않는다. 응답: { "note": {...}, "source": "llm" | "fallback" | "care" }"""
+    user = get_current_user()
+    if user is None:
+        return jsonify({'error': '로그인이 필요합니다'}), 401
+    session = _own_interview_session(user, session_id)
+    if session is None:
+        return jsonify({'error': '면접 기록을 찾을 수 없습니다'}), 404
+
+    existing = session.coach_note
+    if existing is not None:
+        return jsonify({'note': json.loads(existing.content), 'source': existing.source})
+
+    note, source = generate_coach_note(_build_coach_facts(user, session))
+    row = CoachNote(
+        session_id=session.id,
+        content=json.dumps(note, ensure_ascii=False),
+        source=source,
+        model=COACH_MODEL if source == 'llm' else None,
+    )
+    try:
+        db.session.add(row)
+        db.session.commit()
+    except IntegrityError:
+        # 같은 면접의 결과 화면이 동시에 두 번 열려 먼저 저장된 게 있으면 그걸 쓴다
+        db.session.rollback()
+        row = CoachNote.query.filter_by(session_id=session.id).first()
+        if row is None:
+            raise
+        return jsonify({'note': json.loads(row.content), 'source': row.source})
+    return jsonify({'note': note, 'source': source})
 
 
 @app.route('/interview/tts', methods=['POST'])
