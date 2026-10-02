@@ -11,6 +11,8 @@ from __future__ import annotations
 import os
 import logging
 
+from llm_util import effort_options
+
 log = logging.getLogger(__name__)
 
 try:
@@ -79,7 +81,7 @@ def generate_feedback(result: dict, timeout: float = 20.0) -> str | None:
         resp = _client.with_options(timeout=timeout).messages.create(
             model=MODEL,
             max_tokens=800,
-            output_config={"effort": "low"},  # 짧은 생성 — 저비용/저지연
+            **effort_options("low"),  # 짧은 생성 — 저비용/저지연 (SDK 버전과 무관하게 넘기는 법은 llm_util.py)
             system=[{
                 "type": "text",
                 "text": SYSTEM_PROMPT,
