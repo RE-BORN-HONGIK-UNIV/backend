@@ -1108,31 +1108,38 @@ def interview_next_question():
     """Step 3 · 다음 면접 질문 생성.
     body: {
       "tier": "warmup" | "standard" | "practice",
+      "mode": "main" | "follow_up" (선택, 기본 main),
       "previous_questions": [str, ...],
-      "previous_answer": str (선택 — STT로 변환된 방금 답변 텍스트, 꼬리질문용)
+      "previous_answer": str (선택 — 유저가 확인·수정한 방금 답변 텍스트)
     }
     """
     data = request.get_json(silent=True) or {}
     tier = data.get('tier', 'standard')
+    mode = data.get('mode', 'main')
     previous_questions = data.get('previous_questions', [])
     previous_answer = data.get('previous_answer')
 
     if tier not in ('warmup', 'standard', 'practice'):
         return jsonify({'error': "tier는 'warmup' | 'standard' | 'practice' 중 하나여야 합니다"}), 400
+    if mode not in ('main', 'follow_up'):
+        return jsonify({'error': "mode는 'main' | 'follow_up' 중 하나여야 합니다"}), 400
 
-    question, source = generate_question(tier, previous_questions, previous_answer)
+    question, source = generate_question(tier, previous_questions, previous_answer, mode)
     return jsonify({'question': question, 'source': source})
 
 
 @app.route('/interview/tts', methods=['POST'])
 def interview_tts():
-    """Step 3 · 질문 텍스트 → mp3 음성. body: { "text": "..." }"""
+    """Step 3 · 질문 텍스트 → mp3 음성.
+    body: { "text": "...", "tier": "warmup" | "standard" | "practice" (선택, 없으면 standard) }
+    """
     data = request.get_json(silent=True) or {}
     text = data.get('text', '').strip()
+    tier = data.get('tier')  # 면접관별 음성 선택용
     if not text:
         return jsonify({'error': 'text가 필요합니다'}), 400
 
-    audio_bytes = synthesize_speech(text)
+    audio_bytes = synthesize_speech(text, tier=tier)
     if audio_bytes is None:
         return jsonify({'error': 'TTS 생성 실패 (키 없음 또는 호출 오류)'}), 502
 

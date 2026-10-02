@@ -1,13 +1,14 @@
 """
-Step 3 · 면접 질문 생성 (난이도 tier 기반).
+Step 3 · 면접 질문 생성 (난이도 tier + 질문 종류 mode 기반).
 
-- 프론트에서 tier(warmup/standard/practice)와 지금까지 나온 질문 목록을 보내면
-  다음 질문 1개를 생성해 돌려준다.
-- ANTHROPIC_API_KEY 가 없거나 호출이 실패하면 tier별 고정 질문 리스트에서
-  아직 안 나온 걸 하나 골라 폴백한다. (프론트 QUESTION_BANK와 동일한 목록 —
-  백엔드가 죽어도 화면은 안 죽게)
-- STT 연동 전까지는 "이전 답변 내용"은 넘기지 않고, tier + 질문 이력만 사용한다.
-  STT 붙으면 previous_answer 파라미터를 추가해서 꼬리질문에 활용하면 된다.
+- 프론트에서 tier(warmup/standard/practice), mode(main/follow_up), 지금까지 나온 질문 목록,
+  방금 답변(previous_answer)을 보내면 다음 질문 1개를 생성해 돌려준다.
+- mode
+  - main: 새 주제의 기본 질문. 방금 답변을 파고들지 않는다.
+  - follow_up: 방금 답변을 바탕으로 한 꼬리질문. tier가 높을수록 더 깊게 파고든다.
+- 첫 질문(자기소개)은 프론트에서 고정으로 보내고, 이 함수는 두 번째 질문부터 사용된다.
+- ANTHROPIC_API_KEY 가 없거나 호출이 실패하면 고정 질문 리스트에서 폴백한다.
+  (백엔드가 죽어도 화면은 안 죽게)
 """
 from __future__ import annotations
 
@@ -34,24 +35,47 @@ COMMON_RULES = """당신은 'Re-born'이라는 비대면 발화 코칭 앱의 AI
 - 반드시 한국어로, 질문 딱 1개만 출력합니다.
 - 질문 앞뒤에 설명, 인사말, 따옴표, 번호를 붙이지 않습니다. 질문 문장 하나만 출력합니다.
 - 존댓말을 쓰되 딱딱한 격식체가 아니라 편안하게 대화하듯 묻습니다.
-- 이미 나온 질문과 겹치지 않게 합니다."""
+- 이미 나온 질문과 겹치지 않게 합니다. 자기소개는 첫 질문에서 이미 했으므로 다시 묻지 않습니다.
+- 비꼬거나 공격적인 말투, 답변을 깎아내리는 표현은 난이도와 상관없이 절대 쓰지 않습니다."""
 
+# 난이도별 전체 분위기 (기본 질문·꼬리질문 공통)
+# tier는 1·2단계 결과로 정해짐: 긴장이 많이 보일수록 warmup, 안정적일수록 practice
 TIER_INSTRUCTIONS = {
     "warmup": (
-        "현재 난이도는 워밍업입니다 (통합 불안도 낮음, 긴장도 높은 상태로 해석).\n"
-        "자기소개, 취미, 지원 동기처럼 답하기 쉬운 질문만 합니다. 절대 압박하지 않습니다."
+        "현재 난이도는 워밍업입니다. 아직 말하기에 긴장이 많이 보이는 단계입니다.\n"
+        "취미, 관심사, 지원 동기처럼 답하기 쉬운 질문만 합니다. 절대 압박하지 않습니다.\n"
+        "공백기, 은둔 경험 같은 민감한 개인사는 묻지 않습니다."
     ),
     "standard": (
         "현재 난이도는 표준입니다.\n"
-        "실제 채용 면접에서 흔히 나오는 수준의 질문을 합니다."
+        "실제 채용 면접에서 흔히 나오는 수준의 질문을 합니다.\n"
+        "공백기, 은둔 경험 같은 민감한 개인사는 묻지 않습니다."
     ),
     "practice": (
-        "현재 난이도는 실전입니다 (통합 불안도 높음, 실전 대응력을 키울 준비가 된 상태로 해석).\n"
-        "구체적인 근거나 경험을 요구하는, 조금 더 깊이 있는 질문을 합니다."
+        "현재 난이도는 실전입니다. 비교적 안정적으로 말할 수 있어 실전 대응력을 키울 단계입니다.\n"
+        "구체적인 근거나 경험을 요구하는, 조금 더 깊이 있는 질문을 합니다.\n"
+        "실제 면접처럼 공백기 질문도 할 수 있지만, 캐묻거나 탓하는 말투가 아니라 "
+        "그 시간을 어떻게 보냈고 무엇을 준비했는지 설명할 기회를 주는 방식으로 묻습니다."
     ),
 }
 
-# 프론트 difficulty.ts의 QUESTION_BANK와 동일 — API 실패 시 안전망
+# 꼬리질문을 얼마나 깊게 파고들지 난이도별로 다르게
+FOLLOW_UP_INSTRUCTIONS = {
+    "warmup": (
+        "답변에서 좋았던 점을 짧게 짚은 뒤, 부담 없이 조금만 더 이야기해볼 수 있는 가벼운 질문을 합니다."
+    ),
+    "standard": (
+        "답변 중 구체적이지 않은 부분 하나를 골라, 실제 예시나 그때 상황을 조금 더 물어봅니다. "
+        "압박하지 않고 자연스럽게 이어가듯 묻습니다."
+    ),
+    "practice": (
+        "답변의 근거, 이유, 결과를 한 단계 더 파고듭니다. "
+        "'열심히', '많이'처럼 모호한 표현이 있으면 구체적인 행동이나 수치를 묻고, "
+        "다른 방법도 있었을 텐데 왜 그렇게 판단했는지처럼 사고 과정을 묻습니다."
+    ),
+}
+
+# API 실패 시 안전망. 기본 질문은 프론트 difficulty.ts의 QUESTION_BANK와 동일
 FALLBACK_QUESTIONS = {
     "warmup": [
         "간단하게 자기소개 먼저 해주시겠어요?",
@@ -70,32 +94,55 @@ FALLBACK_QUESTIONS = {
     ],
 }
 
+FALLBACK_FOLLOW_UPS = {
+    "warmup": ["방금 이야기 좋았어요. 그 부분을 조금만 더 들려주실 수 있을까요?"],
+    "standard": ["방금 말씀하신 내용을 실제 예시와 함께 조금 더 설명해주실 수 있을까요?"],
+    "practice": ["방금 말씀하신 내용에서, 그렇게 판단한 구체적인 근거를 말씀해주시겠어요?"],
+}
 
-def _fallback_question(tier: str, previous_questions: list[str]) -> str:
+
+def _fallback_question(tier: str, previous_questions: list[str], mode: str) -> str:
+    if mode == "follow_up":
+        return random.choice(FALLBACK_FOLLOW_UPS.get(tier, FALLBACK_FOLLOW_UPS["standard"]))
+
     pool = FALLBACK_QUESTIONS.get(tier, FALLBACK_QUESTIONS["standard"])
     remaining = [q for q in pool if q not in previous_questions]
+    # 첫 질문에서 자기소개를 이미 했으면 자기소개 질문은 제외 (문장이 달라서 위 비교로는 안 걸림)
+    if any("자기소개" in q for q in previous_questions):
+        remaining = [q for q in remaining if "자기소개" not in q]
     if not remaining:
         remaining = pool
     return random.choice(remaining)
 
 
-def _user_prompt(tier: str, previous_questions: list[str], previous_answer: str | None = None) -> str:
+def _user_prompt(
+    tier: str,
+    previous_questions: list[str],
+    previous_answer: str | None,
+    mode: str,
+) -> str:
     instr = TIER_INSTRUCTIONS.get(tier, TIER_INSTRUCTIONS["standard"])
     asked = "\n".join(f"- {q}" for q in previous_questions) if previous_questions else "(아직 없음)"
 
-    answer_section = ""
-    if previous_answer:
-        answer_section = (
-            f"\n\n[방금 사용자 답변]\n{previous_answer}\n\n"
-            "이 답변 내용과 자연스럽게 이어지는 질문을 만들어주세요. "
-            "답변에 더 자세히 물어볼 만한 부분이 있으면 꼬리질문으로, "
-            "없으면 자연스러운 다음 질문으로 넘어가세요."
+    if mode == "follow_up":
+        follow = FOLLOW_UP_INSTRUCTIONS.get(tier, FOLLOW_UP_INSTRUCTIONS["standard"])
+        task = (
+            f"[방금 사용자 답변]\n{previous_answer}\n\n"
+            "지금은 꼬리질문 차례입니다. 방금 답변 내용을 바탕으로 이어지는 질문을 만들어주세요.\n"
+            f"{follow}\n"
+            "답변 속 표현을 한 구절 자연스럽게 짚으며 시작하면 좋습니다 (예: '말씀하신 ~에서').\n"
+            "답변이 아주 짧거나 내용이 거의 없으면, 부담 없이 조금 더 이야기해달라고 부드럽게 요청합니다."
+        )
+    else:
+        task = (
+            "지금은 새로운 기본 질문 차례입니다. "
+            "방금 답변을 더 파고들지 말고, 아직 다루지 않은 새로운 주제로 질문해주세요."
         )
 
     return (
         f"{instr}\n\n"
-        f"[이미 나온 질문]\n{asked}"
-        f"{answer_section}\n\n"
+        f"[이미 나온 질문]\n{asked}\n\n"
+        f"{task}\n\n"
         "다음 질문을 1개만 생성해주세요."
     )
 
@@ -104,13 +151,18 @@ def generate_question(
     tier: str,
     previous_questions: list[str] | None = None,
     previous_answer: str | None = None,
+    mode: str = "main",
     timeout: float = 15.0,
 ) -> tuple[str, str]:
     """(질문, source) 반환. source는 'llm' 또는 'fallback'."""
     previous_questions = previous_questions or []
 
+    # 꼬리질문인데 답변 텍스트가 없으면(인식 실패 등) 파고들 내용이 없으므로 기본 꼬리질문으로
+    if mode == "follow_up" and not previous_answer:
+        return _fallback_question(tier, previous_questions, mode), "fallback"
+
     if _client is None:
-        return _fallback_question(tier, previous_questions), "fallback"
+        return _fallback_question(tier, previous_questions, mode), "fallback"
 
     try:
         resp = _client.with_options(timeout=timeout).messages.create(
@@ -122,12 +174,15 @@ def generate_question(
                 "text": COMMON_RULES,
                 "cache_control": {"type": "ephemeral"},
             }],
-            messages=[{"role": "user", "content": _user_prompt(tier, previous_questions, previous_answer)}],
+            messages=[{
+                "role": "user",
+                "content": _user_prompt(tier, previous_questions, previous_answer, mode),
+            }],
         )
         text = "".join(b.text for b in resp.content if b.type == "text").strip()
         if text:
             return text, "llm"
-        return _fallback_question(tier, previous_questions), "fallback"
+        return _fallback_question(tier, previous_questions, mode), "fallback"
     except Exception as e:  # 네트워크/키/쿼터 등 — 화면 흐름은 절대 안 깨지게
         log.warning("Step3 질문 생성 실패: %s", e)
-        return _fallback_question(tier, previous_questions), "fallback"
+        return _fallback_question(tier, previous_questions, mode), "fallback"
