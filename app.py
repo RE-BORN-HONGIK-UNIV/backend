@@ -840,6 +840,12 @@ def get_latest_stage1():
 # ▼▼▼ [추가] Step2 시선/깜빡임 분석 라우트 ▼▼▼
 @app.route('/analyze/gaze-blink', methods=['POST'])
 def analyze_gaze_blink():
+    # 인증을 먼저 확인한다 — 아래 mediapipe/cv2 지연 import가 무거워서, 로그인 안 한 요청이
+    # 이 라우트를 두드려도 모델을 메모리에 올리지 않게 (API 통합 테스트로 확인된 순서 문제).
+    user = get_current_user()
+    if user is None:
+        return jsonify({'error': '로그인이 필요합니다'}), 401
+
     # mediapipe/cv2는 이 라우트에서만 필요해서 여기서 지연 import (모듈 상단 import를
     # 뺀 이유는 파일 상단 주석 참고) — /health·로그인·커뮤니티 라우트만 받는 워커는
     # 이 라우트가 한 번도 안 불리면 mediapipe/cv2를 아예 메모리에 안 올린다.
@@ -848,10 +854,6 @@ def analyze_gaze_blink():
         POSE_LANDMARK_IDX, LEFT_IRIS_IDX, RIGHT_IRIS_IDX,
     )
     from step2.gaze_analyzer import detect_gaze_segments
-
-    user = get_current_user()
-    if user is None:
-        return jsonify({'error': '로그인이 필요합니다'}), 401
 
     if 'file' not in request.files:
         return jsonify({'error': '파일이 없습니다'}), 400

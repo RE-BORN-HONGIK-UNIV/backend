@@ -55,12 +55,15 @@ python app.py
    표본이 한쪽으로 치우쳤으면(예: 특정 인물 1명이 라벨 대부분을 차지) 근거 부족으로 보류하고
    그 이유를 문서에 남긴다 (`step2/ACCURACY_NOTES.md`의 긴장 임계값 사례 참고).
 
-3. **API/통합 테스트** — 아직 없음. 예전엔 `app.py`가 torch/whisper/mediapipe를 파일
-   최상단에서 import해서 이게 구조적으로 막혀 있었는데, 2026-09 경량화 작업(배포 환경
-   메모리 제한 대응)으로 전부 라우트 함수 안 lazy-import로 옮겨서(`_init_torch()`,
-   `load_models()`, `analyze_gaze_blink()` 참고) 이제 Flask test client로 `/health`,
-   `/api/signup` 같은 가벼운 라우트만 무거운 의존성 없이 테스트할 수 있음. 남은 건
-   테스트를 실제로 쌓는 것 — `docs/TESTING.md` 참고.
+3. **API/통합 테스트** (CI 연동, `tests/api/`) — Flask test client + 인메모리 SQLite로 라우트→DB→응답을 검증.
+   `app.py`가 torch/whisper/mediapipe를 라우트 함수 안 lazy-import로 옮겨둔 덕에(2026-09 경량화) 무거운 모델 없이
+   돌지만, 최상단 import인 librosa·matplotlib 등은 필요해서 CI에서 별도 job(`test-api`)으로 분리했다.
+   ```bash
+   pip install flask flask-cors flask-sqlalchemy pyjwt python-dotenv numpy pillow librosa matplotlib "opencv-python-headless<5" pytest
+   pytest tests/api -v    # 의존성이 없으면 전부 skip
+   ```
+   영상 분석 라우트는 landmark 추출(mediapipe)만 가짜로 대체. 현재 범위(인증·1/2단계 결과·업로드 분석)와
+   남은 범위(3단계 `/interview/*`·커뮤니티·1단계 `/analyze`)는 `docs/TESTING.md` 참고.
 
 ## 트러블슈팅 기록
 
