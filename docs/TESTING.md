@@ -11,7 +11,7 @@
 - 위치: `tests/test_*.py` (labeling 하위 제외)
 - 실행: `.github/workflows/ci.yml`의 `test-pure-logic` job — 매 push/PR마다 자동
 - 의존성: numpy, opencv-python-headless(=cv2 import만 필요, 실제 영상 처리는 안 함) — torch/whisper/mediapipe 불필요
-- 대상: `step2/scoring.py`, `blink_analyzer.py`, `expression_analyzer.py`, `gaze_analyzer.py`(`is_looking_at_camera`만 — 순수 수학), `step3/interview_question.py`(`_fallback_question`, `_user_prompt`), `step1/llm_feedback.py`(`_user_prompt`)
+- 대상: `step2/scoring.py`, `step2/quality.py`(얼굴 검출률 품질 게이트), `blink_analyzer.py`, `expression_analyzer.py`, `gaze_analyzer.py`(`is_looking_at_camera`만 — 순수 수학), `step3/interview_question.py`(`_fallback_question`, `_user_prompt`), `step1/llm_feedback.py`(`_user_prompt`)
 - **여기서 검증 못 하는 것**: 임계값 숫자 자체(0.4가 맞는 값인지)는 이 층의 책임이 아님 → 2층
 
 ## 2층 — 정확도 검증 하네스 (수동, CI 밖)

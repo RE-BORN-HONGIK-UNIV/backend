@@ -55,6 +55,7 @@ from step2.blink_analyzer import (
 from step2.expression_analyzer import compute_expression_series, summarize_expression, detect_expression_segments
 from step2.scoring import score_blink_rate, score_gaze_segments, score_expression
 from step2.set_baseline import calibrate_baseline_ear, calibrate_baseline_gaze
+from step2.quality import check_analyzable
 from step2.live_payload import parse_live_result
 
 
@@ -865,7 +866,14 @@ def analyze_gaze_blink():
             converted_path = analysis_path  # mov/webm -> mp4 변환 결과, 별도 정리 필요
 
         frames = extract_landmarks_from_video(analysis_path)
-        duration_sec = frames[-1]["t"] if frames else 0
+
+        # 얼굴이 거의 안 잡힌 영상은 점수화·저장하지 않고 거절 — 그대로 저장하면 그럴듯한
+        # 점수가 Stage2Result에 남아 "지난번 대비"와 3단계 난이도를 오염시킨다 (step2/quality.py).
+        analyzable, reject_message, _face_ratio = check_analyzable(frames)
+        if not analyzable:
+            return jsonify({'error': reject_message, 'code': 'FACE_NOT_DETECTED'}), 422
+
+        duration_sec = frames[-1]["t"]
 
         # 앞 5초를 캘리브레이션(개인별 기준값) 구간으로 사용
         calib_frames = [f for f in frames if f["t"] <= 5.0]
@@ -947,10 +955,11 @@ def analyze_gaze_blink():
             "previous": previous_entry,
         })
 
-    except Exception as e:
+    except Exception:
         import traceback
+        # 스택트레이스는 서버 로그에만 남긴다 — 응답에 실으면 내부 경로·코드가 클라이언트에 노출됨
         print(f"[ERROR] gaze-blink 분석 실패: {traceback.format_exc()}")
-        return jsonify({'error': str(e), 'detail': traceback.format_exc()}), 500
+        return jsonify({'error': '영상을 분석하지 못했어요. 잠시 후 다시 시도해 주세요.'}), 500
 
     finally:
         for p in (tmp_path, converted_path):
