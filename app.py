@@ -55,6 +55,7 @@ from step2.blink_analyzer import (
 from step2.expression_analyzer import compute_expression_series, summarize_expression, detect_expression_segments
 from step2.scoring import score_blink_rate, score_gaze_segments, score_expression
 from step2.set_baseline import calibrate_baseline_ear, calibrate_baseline_gaze
+from step2.quality import check_analyzable
 from step2.live_payload import parse_live_result
 
 
@@ -839,6 +840,12 @@ def get_latest_stage1():
 # ▼▼▼ [추가] Step2 시선/깜빡임 분석 라우트 ▼▼▼
 @app.route('/analyze/gaze-blink', methods=['POST'])
 def analyze_gaze_blink():
+    # 인증을 먼저 확인한다 — 아래 mediapipe/cv2 지연 import가 무거워서, 로그인 안 한 요청이
+    # 이 라우트를 두드려도 모델을 메모리에 올리지 않게 (API 통합 테스트로 확인된 순서 문제).
+    user = get_current_user()
+    if user is None:
+        return jsonify({'error': '로그인이 필요합니다'}), 401
+
     # mediapipe/cv2는 이 라우트에서만 필요해서 여기서 지연 import (모듈 상단 import를
     # 뺀 이유는 파일 상단 주석 참고) — /health·로그인·커뮤니티 라우트만 받는 워커는
     # 이 라우트가 한 번도 안 불리면 mediapipe/cv2를 아예 메모리에 안 올린다.
@@ -847,10 +854,6 @@ def analyze_gaze_blink():
         POSE_LANDMARK_IDX, LEFT_IRIS_IDX, RIGHT_IRIS_IDX,
     )
     from step2.gaze_analyzer import detect_gaze_segments
-
-    user = get_current_user()
-    if user is None:
-        return jsonify({'error': '로그인이 필요합니다'}), 401
 
     if 'file' not in request.files:
         return jsonify({'error': '파일이 없습니다'}), 400
@@ -865,7 +868,14 @@ def analyze_gaze_blink():
             converted_path = analysis_path  # mov/webm -> mp4 변환 결과, 별도 정리 필요
 
         frames = extract_landmarks_from_video(analysis_path)
-        duration_sec = frames[-1]["t"] if frames else 0
+
+        # 얼굴이 거의 안 잡힌 영상은 점수화·저장하지 않고 거절 — 그대로 저장하면 그럴듯한
+        # 점수가 Stage2Result에 남아 "지난번 대비"와 3단계 난이도를 오염시킨다 (step2/quality.py).
+        analyzable, reject_message, _face_ratio = check_analyzable(frames)
+        if not analyzable:
+            return jsonify({'error': reject_message, 'code': 'FACE_NOT_DETECTED'}), 422
+
+        duration_sec = frames[-1]["t"]
 
         # 앞 5초를 캘리브레이션(개인별 기준값) 구간으로 사용
         calib_frames = [f for f in frames if f["t"] <= 5.0]
@@ -947,10 +957,11 @@ def analyze_gaze_blink():
             "previous": previous_entry,
         })
 
-    except Exception as e:
+    except Exception:
         import traceback
+        # 스택트레이스는 서버 로그에만 남긴다 — 응답에 실으면 내부 경로·코드가 클라이언트에 노출됨
         print(f"[ERROR] gaze-blink 분석 실패: {traceback.format_exc()}")
-        return jsonify({'error': str(e), 'detail': traceback.format_exc()}), 500
+        return jsonify({'error': '영상을 분석하지 못했어요. 잠시 후 다시 시도해 주세요.'}), 500
 
     finally:
         for p in (tmp_path, converted_path):

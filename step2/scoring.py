@@ -8,6 +8,10 @@ def score_blink_rate(blink_count, duration_sec):
     그대로 썼는데, 그러면 정상적인 대화 중 깜빡임도 '빈번'으로 오판정할 위험이 있었음).
     다만 개인차가 워낙 커서 이 10/30 컷오프도 정밀한 임상 기준이 아니라 느슨한 휴리스틱 —
     팀 자체 라벨링 데이터로 검증 전까지는 참고용으로만 취급할 것."""
+    if duration_sec <= 0:
+        # 호출부(app.py)는 step2/quality.py로 길이 0 영상을 먼저 거르지만, 0으로 나누기
+        # (ZeroDivisionError → 500)가 조용히 나지 않게 여기서도 명확한 오류로 막는다.
+        raise ValueError("duration_sec은 0보다 커야 합니다")
     rate_per_min = blink_count / (duration_sec / 60)
     if rate_per_min > 30:
         status = "빈번"

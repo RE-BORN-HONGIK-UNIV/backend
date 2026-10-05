@@ -11,7 +11,7 @@
 - 위치: `tests/test_*.py` (labeling 하위 제외)
 - 실행: `.github/workflows/ci.yml`의 `test-pure-logic` job — 매 push/PR마다 자동
 - 의존성: numpy, opencv-python-headless(=cv2 import만 필요, 실제 영상 처리는 안 함) — torch/whisper/mediapipe 불필요
-- 대상: `step2/scoring.py`, `blink_analyzer.py`, `expression_analyzer.py`, `gaze_analyzer.py`(`is_looking_at_camera`만 — 순수 수학), `step3/interview_question.py`(`_fallback_question`, `_user_prompt`), `step1/llm_feedback.py`(`_user_prompt`)
+- 대상: `step2/scoring.py`, `step2/quality.py`(얼굴 검출률 품질 게이트), `blink_analyzer.py`, `expression_analyzer.py`, `gaze_analyzer.py`(`is_looking_at_camera`만 — 순수 수학), `step3/interview_question.py`(`_fallback_question`, `_user_prompt`), `step1/llm_feedback.py`(`_user_prompt`)
 - **여기서 검증 못 하는 것**: 임계값 숫자 자체(0.4가 맞는 값인지)는 이 층의 책임이 아님 → 2층
 
 ## 2층 — 정확도 검증 하네스 (수동, CI 밖)
@@ -41,37 +41,32 @@ STEP2_TEST_VIDEO=/path/to/video.mp4 pytest tests/test_step2_pipeline.py -v
 영상 전체를 빈틈없이 덮는가, 점수가 0~100 범위·정의된 status 값 안에
 있는가) — 임계값이 정확한지는 여전히 위 2층(라벨링 하네스)의 몫이다.
 
-## 3층 — API/통합 테스트 (아직 없음 — 이제는 구조적 블로커는 해소됨)
+## 3층 — API 통합 테스트 (CI에 연동됨, `tests/api/`)
 
-**질문**: "요청이 라우트→DB→응답까지 올바르게 흐르는가?" (`/api/signup`, `/community/posts` 등)
+**질문**: "요청이 라우트→DB→응답까지 올바르게 흐르는가?"
 
-전에는 `app.py` 최상단에 `import torch`/`torchvision.transforms`/`whisper`/
-`step2.landmark_face_points`(mediapipe, cv2)가 있어서, `app.test_client()`로
-`/api/signup`처럼 DB만 건드리는 라우트 하나를 테스트하려 해도 모듈 import
-시점에 이 전부가 로드됐다.
-
-**2026-09 경량화 작업(배포 환경 메모리 제한 대응)으로 이 구조를 이미 바꿨다** —
-torch/torchvision은 `_init_torch()`(CNN 클래스 정의 포함), whisper는
-`load_models()`, mediapipe/cv2 기반 `step2.landmark_face_points`·
-`step2.gaze_analyzer`는 `analyze_gaze_blink()` 함수 안에서 각각 지연
-import하도록 옮겼다. 동시에 `load_models()`가 `if __name__ == '__main__':`
-블록이 아니라 `/analyze`·`/interview/transcribe` 라우트 진입 시 직접 호출되도록
-바꿔서, gunicorn 등 WSGI 서버로 띄워도(이전엔 이 경로에선 `load_models()`가
-한 번도 안 불려서 모델이 영영 None으로 남는 버그가 있었음) 첫 요청에서 제대로
-로드된다. 프로덕션 동작은 이전과 동일(Python이 import를 캐싱하므로 라우트별
-첫 호출 이후 비용은 같음) — 메모리 사용 시점과 테스트 용이성만 좋아졌다.
-
-즉 `docs/TESTING.md` 이전 버전이 "(B) lazy-import 리팩터링"으로 불렀던 선택지가
-이미 적용된 상태. 남은 건 이 위에 3층 테스트를 실제로 쌓는 것뿐 —
-`/health`·`/api/signup`·`/api/login`·`/community/posts` 같은 라우트는
-`app.test_client()`로 torch/whisper/mediapipe 없이 바로 테스트 가능.
-
-**권장**: 인증/DB CRUD 라우트 위주로 3층을 얇게 시작. CI에 무거운 의존성을
-설치할 필요는 이제 없음(`requirements.txt`의 torch/whisper/mediapipe는
-1층·3층 CI에서 여전히 불필요).
+- 위치: `tests/api/` — `conftest.py`(Flask test client + 인메모리 SQLite, 테스트마다 테이블 비움,
+  실제 `/api/signup`→`/api/login`으로 JWT 발급)와 `test_auth_health.py`·`test_stage_results.py`·
+  `test_gaze_blink_route.py`
+- 실행: `.github/workflows/ci.yml`의 `test-api` job — 매 push/PR마다 자동. 1층과 job을 분리한 이유는
+  `app.py`가 최상단에서 import하는 librosa·matplotlib 설치가 무거워서(1층을 느리게 만들지 않으려고).
+  torch/whisper/mediapipe는 여전히 불필요하다.
+- 로컬: `pytest tests/api` (flask 등이 없으면 이 디렉터리 전체가 skip). `app.py`가 import 시점에 DB·SECRET_KEY를
+  읽으므로 conftest가 import 전에 테스트용 값으로 고정해서 `.env`의 실제 DB에 붙지 않는다.
+- 다루는 것: `/health`(모델 미로딩), 가입·로그인(필수값·약관·중복·잘못된 비밀번호·무효 토큰), 1·2단계
+  최신 조회(null/최신 선택/유저 격리/종합 점수), 2단계 실시간 저장(`/analyze/gaze-blink/live`: 검증 실패 시
+  저장 안 함·"직전 기록" 반환), 업로드 분석(`/analyze/gaze-blink`: 인증·파일 누락·얼굴 미검출 422(저장 안 함)·
+  정상 응답·두 번째 호출의 previous·500 응답에 스택트레이스 미노출)
+- **가짜로 바꾼 것**: `extract_landmarks_from_video`(mediapipe), 머리 자세 추정·시선 구간 판정,
+  하이라이트 ffmpeg 편집. 이 값들의 *정확도*는 2층 몫이고, 여기서는 "품질 게이트→점수 계산→저장→응답"
+  흐름만 검증한다. 변이 확인으로 품질 게이트를 끄면 422 테스트 3개가 실패함을 확인했다.
+- **아직 없는 것**: 커뮤니티 게시판 라우트, 1단계 `/analyze`(whisper·CNN 필요)·`/analyze/feedback`,
+  3단계 `/interview/*`(세션 CRUD·코치 노트·연습 힌트). 같은 conftest를 써서 이어 쌓으면 된다.
+  ※ 이 테스트를 쓰다 `/analyze/gaze-blink`가 로그인 확인보다 mediapipe import를 먼저 해서 비로그인
+  요청에도 모델을 올린다는 걸 발견해 순서를 고쳤다.
 
 ## 검증 안 된 것 요약 (발표 Q&A 대비)
 
 - 2층: 표본이 아직 작음(48프레임·3인, 라벨러 1인) — ACCURACY_NOTES.md "다음 액션" 참고
-- 3층: 전무(구조적 블로커는 해소됐지만 테스트 자체는 아직 안 씀) — 지금은 수동 테스트(Postman 등)에 의존
+- 3층: 인증·1/2단계 결과·업로드 분석 라우트까지만 있음(위 "아직 없는 것" 참고) — 3단계 면접·커뮤니티·1단계 분석 라우트는 아직 수동 테스트(Postman 등)에 의존
 - 프론트엔드: 별도 `frontend/docs`(또는 README) 참고 — 이 문서는 backend 레포 기준
