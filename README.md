@@ -10,7 +10,7 @@ blendshape 기반 규칙 판정) → **3단계** 모의 면접(LLM 질문 생성
 |---|---|
 | 서버 | Flask 3 + Flask-SQLAlchemy(PostgreSQL, `psycopg2-binary`) + Flask-Cors |
 | 인증 | PyJWT(직접 서명/검증), `werkzeug.security`(비밀번호 해시) |
-| 1단계(음성) | librosa(채움말·멈춤) + torch/torchvision(CNN 불안도, CPU-only 빌드) + openai-whisper(STT) |
+| 1단계(음성) | librosa(채움말·멈춤) + torch(CNN 연장·떨림·에너지, CPU-only 빌드) + openai-whisper(STT) |
 | 2단계(표정·시선) | mediapipe(blendshape) + opencv-python-headless |
 | 3단계(면접) | Anthropic API(질문 생성, `claude-sonnet-5` 기본) + Typecast(TTS, 면접관별 음성) |
 | 배포 | Render(Blueprint, `render.yaml`) — gunicorn, 무료 티어(RAM ~512MB) 기준 workers=1 |
@@ -23,7 +23,7 @@ pip install -r requirements.txt
 python app.py          # http://localhost:5000
 ```
 
-torch/torchvision은 CPU-only 인덱스(`--extra-index-url .../whl/cpu`)에서 받아옴 — 배포 환경에
+torch는 CPU-only 인덱스(`--extra-index-url .../whl/cpu`)에서 받아옴 — 배포 환경에
 GPU가 없어서 GPU 빌드(수GB)를 받지 않으려는 목적. mediapipe는 `opencv-python-headless`와만
 호환되니 GUI용 `opencv-python`을 따로 추가하지 말 것(둘이 같이 깔리면 충돌).
 
@@ -35,7 +35,7 @@ DB는 PostgreSQL(2026-09에 MySQL에서 이전 — Render가 매니지드 MySQL�
 
 ```
 app.py          Flask 라우트 전체 (인증, /analyze*, /community/*, /interview/*)
-step1/          음성 분석 — analyze_filler.py(채움말)·analyze_pause.py(멈춤), inference_cnn_final.py(CNN),
+step1/          음성 분석 — analyze_filler.py(채움말)·analyze_pause.py(멈춤), model.py·audio_prep.py(CNN, voice-cnn에서 복사),
                 llm_feedback.py(코칭 피드백 생성, 순수 함수는 _user_prompt)
 step2/          표정·시선 — *_analyzer.py(blink/gaze/expression), scoring.py, set_baseline.py,
                 landmark_face_points.py(랜드마크 인덱스 + MediaPipe 세션 초기화)
@@ -68,7 +68,7 @@ render.yaml     Render Blueprint — 웹 서비스 + Postgres DB를 이 파일 �
 - `TYPECAST_VOICE_WARMUP` / `TYPECAST_VOICE_STANDARD` / `TYPECAST_VOICE_PRACTICE` — 면접관별 음성 ID. 비어 있으면 standard 음성으로 대체, `TYPECAST_MODEL`은 선택(기본 `ssfm-v30`)
 - `COACH_MODEL` — 선택, 면접 직후 코치 노트 에이전트 모델 (기본 `claude-sonnet-5`)
 - `CARE_RESOURCES` — 선택, 답변에서 위기 신호가 감지됐을 때 결과 화면에 보여줄 도움 안내 문구(기관·연락처). **팀이 확정한 내용만** 넣을 것 — 비어 있으면 일반적인 돌봄 문구만 나옴
-- `MODEL_PATH` — 1단계 CNN 모델 가중치 파일 경로, 선택
+- `MODELS_DIR` — 1단계 CNN 모델 폴더(기본 `models`, 라벨별 `models/<label>/model.pth` + `config.json`), 선택
 
 ## 테스트 — 3계층 (자세한 설계는 `docs/TESTING.md`)
 

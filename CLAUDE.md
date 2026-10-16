@@ -7,7 +7,7 @@ Flask 백엔드. 3단계 파이프라인: **1단계** 음성(채움말·멈춤·
 
 ## 스택
 
-Flask + Flask-SQLAlchemy(MySQL) · torch/torchvision(CNN 추론) · whisper·librosa
+Flask + Flask-SQLAlchemy(MySQL) · torch(CNN 추론) · whisper·librosa
 (음성) · mediapipe·opencv(표정/시선) · Anthropic API(`claude-sonnet-5` 기본,
 질문 생성·코칭 피드백에 사용, 환경변수로 모델 교체 가능)
 
@@ -15,7 +15,7 @@ Flask + Flask-SQLAlchemy(MySQL) · torch/torchvision(CNN 추론) · whisper·lib
 
 ```
 app.py          Flask 라우트 전체 (인증, /analyze*, /community/*, /interview/*)
-step1/          음성 분석 — analyze_filler.py(채움말)·analyze_pause.py(멈춤), inference_cnn_final.py(CNN),
+step1/          음성 분석 — analyze_filler.py(채움말)·analyze_pause.py(멈춤), model.py·audio_prep.py(CNN, voice-cnn에서 복사),
                 llm_feedback.py(코칭 피드백 생성, 순수 함수는 _user_prompt)
 step2/          표정·시선 — *_analyzer.py(blink/gaze/expression), scoring.py, set_baseline.py
                 smile_cascade.py — OpenCV Haar Cascade 미소 검출 시도, 인물 간 일반화 실패로 폐기(기록용 보존)

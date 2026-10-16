@@ -1,6 +1,6 @@
 """
 Re-born 보이스 터치 - Flask 백엔드 (최종 버전)
-- CNN: 슬라이딩 윈도우(3초/1초 stride) 추론
+- CNN: 라벨별 이진 모델(연장·떨림·에너지), 3초 조각 확률의 최댓값
 - 채움말: librosa 소리구간 + Whisper word timestamp 결합
 - 멈춤: librosa 기반 불안한 멈춤 분석
 """
@@ -9,17 +9,12 @@ import os
 from dotenv import load_dotenv
 load_dotenv(encoding='utf-8')  # .env 파일 읽어서 환경변수로 등록
 
-import io
 import base64
 import subprocess
 import tempfile
 import time
 import numpy as np
 import librosa
-import librosa.display
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 from flask import Flask, request, jsonify, Response
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -28,16 +23,15 @@ import datetime
 import json
 from flask_cors import CORS
 from sqlalchemy.exc import IntegrityError
-from PIL import Image
 from step3.tts import synthesize_speech
 from db_url import normalize_database_url
 
-# torch/torchvision, whisper, step2의 mediapipe·cv2 기반 모듈(landmark_face_points,
+# torch, whisper, step2의 mediapipe·cv2 기반 모듈(landmark_face_points,
 # gaze_analyzer)은 여기서 import하지 않고 실제로 쓰는 함수 안에서 지연 import한다.
 # 이유: 이것들만으로도 수백MB가 프로세스 메모리에 항상 올라가는데, /health·로그인·
 # 커뮤니티처럼 이 라이브러리가 전혀 필요 없는 라우트도 같은 워커에서 뜨기 때문에,
 # 모듈 최상단에서 import하면 그 라우트만 받는 워커도 무조건 이 비용을 낸다
-# (배포 환경 메모리 제한 때문에 2026-09 경량화 작업으로 옮김. _init_torch()/load_models() 참고).
+# (배포 환경 메모리 제한 때문에 2026-09 경량화 작업으로 옮김. load_models() 참고).
 
 try:
     from dotenv import load_dotenv
@@ -66,6 +60,9 @@ from step1.analyze_pause import analyze_pause
 
 # Step1 LLM 코칭 피드백 (선택적 — 키 없으면 자동 폴백)
 from step1.llm_feedback import generate_feedback
+
+# Step1 CNN 입력 손질 (voice-cnn/src/audio_prep.py 복사본 — 학습과 똑같이 손질해야 함)
+from step1 import audio_prep
 
 # Step1 종합 점수 (Stage1Result에 저장할 값 — 프론트 overallScore와 동일 공식)
 from step1.stage1_score import overall_score as stage1_overall_score
@@ -310,83 +307,12 @@ try:
 except Exception as e:
     print(f"[WARNING] DB 연결 실패, DB 없이 서버 실행: {e}")
 
-MODEL_PATH = os.environ.get("MODEL_PATH", "best_size_large.pth")
-
-
-# ── CNN 슬라이딩 윈도우 설정 (inference_cnn_final.py 동일) ──────────
-TARGET_SR = 22050
-N_MELS = 128
-N_FFT = 2048
-HOP_LENGTH = 512
-F_MIN = 300
-F_MAX = 2500
-IMG_SIZE = 224
-WINDOW_SEC = 3.0
-STRIDE_SEC = 1.0
-
-
-# ── CNN 모델 구조 ────────────────────────────────────────────────────
-# torch/torchvision은 _init_torch()가 처음 호출될 때만 import한다 (모듈 상단 import
-# 제거 사유는 파일 상단 주석 참고). SpeechAnxietyCNN/transform은 그 전까지 None이고,
-# load_models()가 항상 _init_torch()를 먼저 불러서 채워준다.
-SpeechAnxietyCNN = None
-transform = None
-
-def _init_torch():
-    """torch/torchvision을 최초 1회만 import하고 CNN 클래스·전처리 파이프라인을 준비."""
-    global torch, SpeechAnxietyCNN, transform
-    if SpeechAnxietyCNN is not None:
-        return
-    import torch
-    import torch.nn as nn
-    import torchvision.transforms as transforms
-
-    class _SpeechAnxietyCNN(nn.Module):
-        def __init__(self, dropout=0.5, size='large'):
-            super(_SpeechAnxietyCNN, self).__init__()
-            sizes = {
-                'small':  [32, 64, 128],
-                'medium': [64, 128, 256],
-                'large':  [128, 256, 512]
-            }
-            filters = sizes[size]
-            self.features = nn.Sequential(
-                nn.Conv2d(3, filters[0], kernel_size=3, padding=1),
-                nn.BatchNorm2d(filters[0]),
-                nn.ReLU(),
-                nn.MaxPool2d(2, 2),
-                nn.Conv2d(filters[0], filters[1], kernel_size=3, padding=1),
-                nn.BatchNorm2d(filters[1]),
-                nn.ReLU(),
-                nn.MaxPool2d(2, 2),
-                nn.Conv2d(filters[1], filters[2], kernel_size=3, padding=1),
-                nn.BatchNorm2d(filters[2]),
-                nn.ReLU(),
-                nn.MaxPool2d(2, 2),
-            )
-            self.gap = nn.AdaptiveAvgPool2d(1)
-            self.classifier = nn.Sequential(
-                nn.Flatten(),
-                nn.Linear(filters[2], 256),
-                nn.ReLU(),
-                nn.Dropout(dropout),
-                nn.Linear(256, 3)
-            )
-
-        def forward(self, x):
-            x = self.features(x)
-            x = self.gap(x)
-            x = self.classifier(x)
-            return x
-
-    SpeechAnxietyCNN = _SpeechAnxietyCNN
-    transform = transforms.Compose([
-        transforms.Resize((IMG_SIZE, IMG_SIZE)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-    ])
-
-cnn_model = None
+# ── CNN 모델 (라벨별 이진 모델) ──────────────────────────────────────
+# models/<label>/에 model.pth(state_dict)와 config.json(손질 값·정규화·기준선)을 손으로 넣는다.
+# 설계도(step1/model.py)와 손질(step1/audio_prep.py)은 voice-cnn에서 복사한 파일이다.
+MODELS_DIR = os.environ.get("MODELS_DIR", "models")
+CNN_LABELS = ('prolongation', 'tremor', 'energy')
+cnn_models = {}  # label -> (model, cfg). 없는 라벨은 pending
 whisper_model = None
 _models_loaded = False
 
@@ -396,26 +322,30 @@ def load_models():
     띄우면(배포 환경이 이 방식) 이 함수 자체가 한 번도 안 불리고 모델이 영영 None으로
     남는 버그가 있었다 — /analyze, /interview/transcribe 라우트 진입 시 직접 호출하는
     방식으로 바꿔서 실행 방식(개발 서버/gunicorn 등)과 무관하게 항상 동작하게 했다."""
-    global cnn_model, whisper_model, WHISPER_AVAILABLE, _models_loaded
+    global whisper_model, WHISPER_AVAILABLE, _models_loaded
     if _models_loaded:
         return
     _models_loaded = True
 
-    if os.path.exists(MODEL_PATH):
+    for label in CNN_LABELS:
+        folder = os.path.join(MODELS_DIR, label)
+        if not os.path.exists(os.path.join(folder, 'model.pth')):
+            print(f"[WARNING] CNN 모델 없음(pending): {folder}")
+            continue
         try:
-            _init_torch()  # CNN 가중치 파일이 실제로 있을 때만 torch를 메모리에 올림 —
-            # 지금처럼 파일이 없으면(데모 모드) /analyze를 아무리 호출해도 torch 자체가
-            # 로드되지 않는다 (2026-09 경량화 후속: 순서 뒤집기 전엔 데모 모드에서도
-            # 매번 쓸데없이 torch 전체를 import하고 있었음).
-            m = SpeechAnxietyCNN(dropout=0.5, size='large')
-            m.load_state_dict(torch.load(MODEL_PATH, map_location='cpu'))
+            # 모델 파일이 있을 때만 torch를 메모리에 올린다 (2026-09 경량화)
+            import torch
+            from step1.model import SmallCNN
+            with open(os.path.join(folder, 'config.json'), encoding='utf-8') as fp:
+                cfg = json.load(fp)
+            m = SmallCNN()
+            m.load_state_dict(torch.load(os.path.join(folder, 'model.pth'), map_location='cpu', weights_only=True)['state_dict'])
             m.eval()
-            cnn_model = m
-            print(f"[OK] CNN 모델 로드 완료: {MODEL_PATH}")
+            cnn_models[label] = (m, cfg)
+            print(f"[OK] CNN 모델 로드 완료: {folder}")
         except Exception as e:
-            print(f"[ERROR] CNN 모델 로드 실패: {e}")
-    else:
-        print(f"[WARNING] CNN 모델 파일 없음: {MODEL_PATH}")
+            # 그 라벨만 pending으로 두고 서버는 그대로 켠다
+            print(f"[ERROR] !!!!! CNN 모델 로드 실패, pending 처리: {folder} — {e}")
 
     try:
         import whisper
@@ -534,77 +464,20 @@ def build_highlight_clip(video_path, segments, max_total_sec=15.0, pad_sec=0.3):
                 except:
                     pass
 
-# ── 멜스펙트로그램 변환 (3초 조각) ───────────────────────────────────
-def audio_chunk_to_melspectrogram(y_chunk, sr):
-    mel_spec = librosa.feature.melspectrogram(
-        y=y_chunk, sr=sr,
-        n_mels=N_MELS, n_fft=N_FFT,
-        hop_length=HOP_LENGTH,
-        fmin=F_MIN, fmax=F_MAX
-    )
-    mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
-
-    fig, ax = plt.subplots(figsize=(2.24, 2.24), dpi=100)
-    ax.set_position([0, 0, 1, 1])
-    librosa.display.specshow(mel_spec_db, sr=sr, hop_length=HOP_LENGTH,
-                             fmin=F_MIN, fmax=F_MAX, cmap='magma', ax=ax)
-    ax.axis('off')
-
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
-    plt.close()
-    buf.seek(0)
-    return Image.open(buf).convert('RGB')
-
-# ── CNN 추론 (슬라이딩 윈도우, inference_cnn_final.py 동일 로직) ────
+# ── CNN 추론 ─────────────────────────────────────────────────────────
 def predict_cnn(audio_path):
-    y, sr = librosa.load(audio_path, sr=TARGET_SR)
-
-    window_len = int(WINDOW_SEC * sr)
-    stride_len = int(STRIDE_SEC * sr)
-
-    # 3초보다 짧으면 반사 패딩
-    if len(y) < window_len:
-        pad_len = window_len - len(y)
-        y = np.pad(y, (0, pad_len), mode='reflect')
-
-    # 슬라이딩 윈도우로 자르기
-    chunks = []
-    start = 0
-    while start + window_len <= len(y):
-        chunks.append(y[start:start + window_len])
-        start += stride_len
-
-    # 마지막 구간 보정
-    if not chunks or (len(y) - (len(chunks) - 1) * stride_len) > stride_len:
-        chunks.append(y[-window_len:])
-
-    # 각 윈도우별 추론
-    all_probs = []
-    for chunk in chunks:
-        img = audio_chunk_to_melspectrogram(chunk, sr)
-        img_tensor = transform(img).unsqueeze(0)
+    """준비된 라벨마다 3초 조각 확률의 최댓값과 조각 수를 구한다. 준비 안 된 라벨은 결과에 없다."""
+    import torch
+    out = {}
+    for label, (model, cfg) in cnn_models.items():
+        y = audio_prep.load(audio_path, cfg)
+        starts = audio_prep.starts(y, cfg, cfg['judge_hop_sec'])
+        x = np.stack([audio_prep.normalize(audio_prep.logmel(y, s, cfg), cfg) for s in starts])
         with torch.no_grad():
-            output = cnn_model(img_tensor)
-            probs = torch.sigmoid(output)
-        all_probs.append(probs.squeeze(0).numpy())
-
-    avg_probs = np.mean(all_probs, axis=0)
-
-    result = {
-        'prolongation': round(float(avg_probs[0]), 4),
-        'tremor':       round(float(avg_probs[1]), 4),
-        'energy':       round(float(avg_probs[2]), 4),
-    }
-    # ▲▲▲ [수정 끝] ▲▲▲
-    scores = {
-        'prolongation_score': round(100 * (1 - result['prolongation']), 1),
-        'tremor_score':       round(100 * (1 - result['tremor']), 1),
-        'energy_score':       round(100 * (1 - result['energy']), 1),
-    }
-    print(f"[CNN] 윈도우 수: {len(chunks)}, 확률: {result}")
-    return {**result, **scores, 'window_count': len(chunks)}
-
+            p = torch.sigmoid(model(torch.from_numpy(x).float().unsqueeze(1))).max().item()
+        out[label] = (p, len(starts))
+    print(f"[CNN] {out}")
+    return out
 
 
 # ── API ──────────────────────────────────────────────────────────────
@@ -664,7 +537,7 @@ def login():
 def health():
     return jsonify({
         'status': 'ok',
-        'cnn_model_loaded': cnn_model is not None,
+        'cnn_model_loaded': bool(cnn_models),
         'whisper_loaded': whisper_model is not None,
     })
 
@@ -728,22 +601,18 @@ def analyze():
     try:
         tmp_path = save_temp_file(f)
 
-        # 1) CNN (슬라이딩 윈도우) → 음성 안정성, 발화 지속성, 발화 에너지
-        if cnn_model is not None:
-            cnn_result = predict_cnn(tmp_path)
-            stability  = cnn_result['tremor_score']
-            continuity = cnn_result['prolongation_score']
-            calm       = cnn_result['energy_score']
-            cnn_probs  = {
-                'tremor':       round(cnn_result['tremor'] * 100, 1),
-                'prolongation': round(cnn_result['prolongation'] * 100, 1),
-                'energy':       round(cnn_result['energy'] * 100, 1),
-            }
-            window_count = cnn_result['window_count']
-        else:
-            stability = continuity = calm = 0
-            cnn_probs = {'tremor': 0, 'prolongation': 0, 'energy': 0}
-            window_count = 0
+        # 1) CNN (라벨별 모델) → 음성 안정성, 발화 지속성, 발화 에너지
+        # 모델이 없는 라벨은 0이 아니라 None(null) — 0은 '아주 좋음'으로 잘못 읽힌다
+        cnn_result = predict_cnn(tmp_path)
+        cnn_probs, cnn_scores, detected = {}, {}, {}
+        for label in CNN_LABELS:
+            p = cnn_result[label][0] if label in cnn_result else None
+            cnn_probs[label]  = None if p is None else round(p * 100, 1)
+            cnn_scores[label] = None if p is None else round(100 * (1 - p), 1)
+            detected[label]   = None if p is None else p >= cnn_models[label][1]['threshold']
+        model_status = {label: 'ready' if label in cnn_models else 'pending' for label in CNN_LABELS}
+        stability, continuity, calm = cnn_scores['tremor'], cnn_scores['prolongation'], cnn_scores['energy']
+        window_count = max((n for _, n in cnn_result.values()), default=0)
 
         # 2) 채움말 (librosa + Whisper) → 발화 유창성
         filler_result = analyze_filler(tmp_path, whisper_model=whisper_model, calibration=calibration)
@@ -755,9 +624,9 @@ def analyze():
 
         # 로그인한 유저의 결과만 저장 (3단계 난이도 산정용). 로그인 없이도 분석 자체는
         # 되게 두고, 저장이 실패해도 분석 응답은 정상 반환한다 — 저장은 부가 기능.
-        # demo_mode(CNN 모델 없음)의 0점 더미 값은 난이도를 왜곡하니 저장하지 않는다.
+        # CNN 세 모델이 모두 준비됐을 때만 저장한다 (빈 점수는 저장할 수 없고 난이도를 왜곡한다).
         user = get_current_user()
-        if user is not None and cnn_model is not None:
+        if user is not None and len(cnn_models) == len(CNN_LABELS):
             try:
                 scores_to_save = {
                     'stability': stability, 'fluency': fluency, 'pause_ctrl': pause_ctrl,
@@ -790,6 +659,8 @@ def analyze():
                 '침묵 조절력 (pause)':        pause_ctrl,
             },
             'probabilities': cnn_probs,
+            'detected': detected,
+            'model_status': model_status,
             'filler_detail': {
                 'filler_count':       filler_result['filler_count'],
                 'sound_segment_count': filler_result['sound_segment_count'],
@@ -803,7 +674,7 @@ def analyze():
                 'total_duration_sec':      pause_result['total_duration_sec'],
             },
             'cnn_window_count': window_count,
-            'demo_mode': cnn_model is None,
+            'demo_mode': not cnn_models,
         })
 
     except Exception as e:
