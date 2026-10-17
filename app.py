@@ -466,16 +466,20 @@ def build_highlight_clip(video_path, segments, max_total_sec=15.0, pad_sec=0.3):
 
 # ── CNN 추론 ─────────────────────────────────────────────────────────
 def predict_cnn(audio_path):
-    """준비된 라벨마다 3초 조각 확률의 최댓값과 조각 수를 구한다. 준비 안 된 라벨은 결과에 없다."""
+    """준비된 라벨마다 3초 조각 확률의 최댓값과 조각 수를 구한다. 준비 안 된 라벨은 결과에 없다.
+    음량을 잴 수 없는 조각(조각 단위 음량 맞추기에서 거의 무음)은 건너뛰고, 남는 조각이 없으면 확률 0이다."""
     import torch
     out = {}
     for label, (model, cfg) in cnn_models.items():
         y = audio_prep.load(audio_path, cfg)
-        starts = audio_prep.starts(y, cfg, cfg['judge_hop_sec'])
-        x = np.stack([audio_prep.normalize(audio_prep.logmel(y, s, cfg), cfg) for s in starts])
+        mels = [audio_prep.logmel(y, s, cfg) for s in audio_prep.starts(y, cfg, cfg['judge_hop_sec'])]
+        mels = [audio_prep.normalize(m, cfg) for m in mels if m is not None]
+        if not mels:
+            out[label] = (0.0, 0)
+            continue
         with torch.no_grad():
-            p = torch.sigmoid(model(torch.from_numpy(x).float().unsqueeze(1))).max().item()
-        out[label] = (p, len(starts))
+            p = torch.sigmoid(model(torch.from_numpy(np.stack(mels)).float().unsqueeze(1))).max().item()
+        out[label] = (p, len(mels))
     print(f"[CNN] {out}")
     return out
 
@@ -610,7 +614,9 @@ def analyze():
             cnn_probs[label]  = None if p is None else round(p * 100, 1)
             cnn_scores[label] = None if p is None else round(100 * (1 - p), 1)
             detected[label]   = None if p is None else p >= cnn_models[label][1]['threshold']
-        model_status = {label: 'ready' if label in cnn_models else 'pending' for label in CNN_LABELS}
+        # config.json의 status가 reference면 시험을 통과하지 못한 참고용 모델이다(떨림 v1)
+        model_status = {label: cnn_models[label][1].get('status', 'ready') if label in cnn_models else 'pending'
+                        for label in CNN_LABELS}
         stability, continuity, calm = cnn_scores['tremor'], cnn_scores['prolongation'], cnn_scores['energy']
         window_count = max((n for _, n in cnn_result.values()), default=0)
 
