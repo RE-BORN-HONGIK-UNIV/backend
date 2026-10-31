@@ -71,11 +71,12 @@ from step1.llm_feedback import generate_feedback
 from step1.stage1_score import overall_score as stage1_overall_score
 
 # Step3 면접 질문 생성 (선택적 — 키 없으면 자동 폴백)
-from step3.interview_question import generate_question
+from step3.interview_question import clean_about_me, generate_question
 
 # 면접 직후 코치 노트 에이전트 (이력 조회 도구 + 검증 + 대체 노트)
 from coach.agent import MODEL as COACH_MODEL, generate_note as generate_coach_note
 from coach.practice import RateLimiter, generate_hint, parse_hint_request
+from haru.talk import generate_reply, parse_profile_request, parse_reply_request, summarize_profile
 
 # Step3 면접 기록(세션·질문·답변) 요청 검증
 from step3.session_payload import (
@@ -1185,7 +1186,8 @@ def interview_next_question():
       "tier": "warmup" | "standard" | "practice",
       "mode": "main" | "follow_up" (선택, 기본 main),
       "previous_questions": [str, ...],
-      "previous_answer": str (선택 — 유저가 확인·수정한 방금 답변 텍스트)
+      "previous_answer": str (선택 — 유저가 확인·수정한 방금 답변 텍스트),
+      "about_me": [str, ...] (선택 — 하루가 정리하고 유저가 확인한 자기 이야기, "항목: 내용" 형식)
     }
     로그인(Authorization 헤더)이 있으면 그 유저의 최신 1·2단계 세부 점수로 질문 방식을 조절하고,
     지난 면접에서 했던 기본 질문과 겹치지 않게 한다 (선택 — 비로그인이거나 기록이 없으면 tier만으로 생성).
@@ -1204,8 +1206,10 @@ def interview_next_question():
     user = get_current_user()
     profile = _load_score_profile(user)
     past_questions = _load_past_questions(user) if mode == 'main' else []  # 꼬리질문엔 불필요
+    about_me = clean_about_me(data.get('about_me'))
     question, source = generate_question(
         tier, previous_questions, previous_answer, mode, profile=profile, past_questions=past_questions,
+        about_me=about_me,
     )
     return jsonify({'question': question, 'source': source})
 
@@ -1422,10 +1426,54 @@ def get_practice_hint():
     return jsonify({'hint': hint, 'source': source})
 
 
+# 하루 대화는 대답마다 AI를 부르므로(1·2단계 합쳐 8번 안팎) 연습 힌트보다 넉넉하게 잡되, 연타·악용은 막는다.
+_haru_limiter = RateLimiter(limit=120)
+
+
+@app.route('/haru/reply', methods=['POST'])
+def haru_reply():
+    """1·2단계 하루 대화: 방금 대답에 한 문장 반응 + 다음 질문으로 잇는 말 (경량 웹 /reply를 옮긴 것).
+    body: { "question": str, "answer": str, "next": str|null, "retried": bool, "index": int,
+            "history": [{"ai": bool, "text": str}, ...] }
+    응답: { "say": str, "retry": bool, "source": "llm" | "fallback" | "care" }
+    AI를 못 쓰면 정해 둔 공감 문장 + 다음 질문을 주므로 로그인·형식·횟수 제한 외에는 실패하지 않는다."""
+    user = get_current_user()
+    if user is None:
+        return jsonify({'error': '로그인이 필요합니다'}), 401
+    try:
+        req = parse_reply_request(request.get_json(silent=True))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    if not _haru_limiter.allow(user.id):
+        return jsonify({'error': '잠시 뒤에 다시 이야기해요.'}), 429
+    out, source = generate_reply(req)
+    return jsonify({**out, 'source': source})
+
+
+@app.route('/haru/profile', methods=['POST'])
+def haru_profile():
+    """"하루가 이렇게 이해했어요" 카드: 1·2단계 대답을 항목별로 짧게 정리.
+    body: { "items": [{"label": str, "question": str, "answer": str}, ...] }
+    응답: { "items": [{"label": str, "value": str}, ...], "source": "llm" | "fallback" | "care" }
+    AI를 못 쓰면 대답 앞부분을 그대로 준다(사용자가 카드에서 고침). 결과는 서버에 저장하지 않는다."""
+    user = get_current_user()
+    if user is None:
+        return jsonify({'error': '로그인이 필요합니다'}), 401
+    try:
+        items = parse_profile_request(request.get_json(silent=True))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    if not _haru_limiter.allow(user.id):
+        return jsonify({'error': '잠시 뒤에 다시 시도해주세요.'}), 429
+    out, source = summarize_profile(items)
+    return jsonify({'items': out, 'source': source})
+
+
 @app.route('/interview/tts', methods=['POST'])
 def interview_tts():
     """Step 3 · 질문 텍스트 → mp3 음성.
-    body: { "text": "...", "tier": "warmup" | "standard" | "practice" (선택, 없으면 standard) }
+    body: { "text": "...", "tier": "warmup" | "standard" | "practice" | "haru" (선택, 없으면 standard) }
+    "haru"는 1·2단계 대화 상대 하루의 목소리.
     """
     data = request.get_json(silent=True) or {}
     text = data.get('text', '').strip()

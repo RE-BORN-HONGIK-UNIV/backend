@@ -17,6 +17,7 @@ import logging
 import random
 
 from llm_util import effort_options
+from coach.safety import detect_care
 
 log = logging.getLogger(__name__)
 
@@ -222,6 +223,37 @@ def _past_section(past_questions: list[str] | None, previous_questions: list[str
     )
 
 
+# ── 하루와 나눈 이야기 ──────────────────────────────────────────────────
+# 1·2단계에서 하루(대화 상대)가 정리하고 사용자가 확인·수정한 자기 이야기("하루가 이렇게 이해했어요" 카드).
+# 기본 질문의 소재로만 참고한다 — 낯선 질문보다 자기 이야기로 시작하면 실전 면접의 부담이 줄어서다.
+# 위기 신호가 있으면 AI로 보내지 않는다(coach/safety.py). 개수·길이는 프롬프트가 길어지지 않게 자른다.
+MAX_ABOUT_ITEMS = 8
+MAX_ABOUT_LEN = 80
+
+
+def clean_about_me(about_me) -> list[str]:
+    """요청의 about_me(["항목: 내용", ...])를 정리. 형식이 틀리거나 위기 신호가 있으면 빈 목록."""
+    if not isinstance(about_me, list):
+        return []
+    out = [" ".join(str(x).split())[:MAX_ABOUT_LEN] for x in about_me if isinstance(x, str) and x.strip()]
+    out = out[:MAX_ABOUT_ITEMS]
+    return [] if detect_care(out) else out
+
+
+def _about_section(about_me: list[str] | None, mode: str) -> str:
+    """프롬프트에 붙일 "사용자가 들려준 이야기" 섹션. 기본 질문 차례가 아니거나 내용이 없으면 빈 문자열."""
+    if mode != "main" or not about_me:
+        return ""
+    lines = "\n".join(f"- {x}" for x in about_me)
+    return (
+        "[사용자가 미리 들려준 자기 이야기 — 사용자가 직접 확인한 내용]\n"
+        f"{lines}\n"
+        "새 기본 질문은 가능하면 이 이야기 중 아직 다루지 않은 것을 소재로 삼습니다(예: 해 본 일, 관심사, 장점). "
+        "면접에 대한 걱정은 질문 소재로 쓰지 말고 질문의 부담을 조절하는 데만 참고합니다. "
+        "적혀 있지 않은 내용을 사실처럼 덧붙이지 않습니다.\n\n"
+    )
+
+
 def _fallback_question(
     tier: str, previous_questions: list[str], mode: str, past_questions: list[str] | None = None
 ) -> str:
@@ -247,6 +279,7 @@ def _user_prompt(
     mode: str,
     profile: dict | None = None,
     past_questions: list[str] | None = None,
+    about_me: list[str] | None = None,
 ) -> str:
     instr = TIER_INSTRUCTIONS.get(tier, TIER_INSTRUCTIONS["standard"])
     asked = "\n".join(f"- {q}" for q in previous_questions) if previous_questions else "(아직 없음)"
@@ -271,6 +304,7 @@ def _user_prompt(
         f"[이미 나온 질문]\n{asked}\n\n"
         f"{_profile_section(profile)}"
         f"{_past_section(past_questions, previous_questions, mode)}"
+        f"{_about_section(about_me, mode)}"
         f"{task}\n\n"
         "다음 질문을 1개만 생성해주세요."
     )
@@ -284,11 +318,13 @@ def generate_question(
     timeout: float = 15.0,
     profile: dict | None = None,
     past_questions: list[str] | None = None,
+    about_me: list[str] | None = None,
 ) -> tuple[str, str]:
     """(질문, source) 반환. source는 'llm' 또는 'fallback'.
     profile: 1·2단계 세부 점수(_weak_axes 참고) — 약한 항목에 맞춰 질문 방식만 조절한다.
     past_questions: 지난 면접의 기본 질문(최근 순) — 겹치지 않는 새 주제로 묻게 한다. 폴백 경로에서는
-    고정 질문 중 지난번에 안 나온 것을 우선 고른다."""
+    고정 질문 중 지난번에 안 나온 것을 우선 고른다.
+    about_me: 하루와 나눈 이야기(clean_about_me로 정리한 것) — 기본 질문의 소재로 참고한다."""
     previous_questions = previous_questions or []
 
     # 꼬리질문인데 답변 텍스트가 없으면(인식 실패 등) 파고들 내용이 없으므로 기본 꼬리질문으로
@@ -310,7 +346,9 @@ def generate_question(
             }],
             messages=[{
                 "role": "user",
-                "content": _user_prompt(tier, previous_questions, previous_answer, mode, profile, past_questions),
+                "content": _user_prompt(
+                    tier, previous_questions, previous_answer, mode, profile, past_questions, about_me,
+                ),
             }],
         )
         text = "".join(b.text for b in resp.content if b.type == "text").strip()
