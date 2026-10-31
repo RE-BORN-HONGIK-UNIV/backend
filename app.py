@@ -63,6 +63,7 @@ from step1.analyze_filler import analyze_filler, analyze_calibration
 
 # Step1 멈춤 분석 (librosa 소리구간 사이 무음 길이 기반, 1.2초 이상 "긴 멈춤"으로 분류)
 from step1.analyze_pause import analyze_pause
+from step1.report_detail import filler_events, long_pause_events
 
 # Step1 LLM 코칭 피드백 (선택적 — 키 없으면 자동 폴백)
 from step1.llm_feedback import generate_feedback
@@ -795,6 +796,8 @@ def analyze():
                 'filler_count':       filler_result['filler_count'],
                 'sound_segment_count': filler_result['sound_segment_count'],
                 'filler_ratio_pct':   round(filler_result['filler_ratio'] * 100, 1),
+                # 최종 통합 리포트용: 어떤 채움말이 언제 나왔는지 (step1/report_detail.py)
+                'events':             filler_events(filler_result.get('events')),
             },
             'pause_detail': {
                 'pause_count':             pause_result['pause_count'],
@@ -802,6 +805,8 @@ def analyze():
                 'anxious_pause_total_sec': pause_result['anxious_pause_total_sec'],
                 'anxious_pause_ratio':     pause_result['anxious_pause_ratio'],
                 'total_duration_sec':      pause_result['total_duration_sec'],
+                # 최종 통합 리포트용: 긴 멈춤이 언제 몇 초였는지
+                'long_pauses':             long_pause_events(pause_result.get('events')),
             },
             'cnn_window_count': window_count,
             'demo_mode': cnn_model is None,
