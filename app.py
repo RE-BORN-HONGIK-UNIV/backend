@@ -57,6 +57,7 @@ from step1.analyze_filler import analyze_filler, analyze_calibration
 
 # Step1 멈춤 분석 (librosa 소리구간 사이 무음 길이 기반, 1.2초 이상 "긴 멈춤"으로 분류)
 from step1.analyze_pause import analyze_pause
+from step1.report_detail import build_report_detail
 
 # Step1 LLM 코칭 피드백 (선택적 — 키 없으면 자동 폴백)
 from step1.llm_feedback import generate_feedback
@@ -466,21 +467,21 @@ def build_highlight_clip(video_path, segments, max_total_sec=15.0, pad_sec=0.3):
 
 # ── CNN 추론 ─────────────────────────────────────────────────────────
 def predict_cnn(audio_path):
-    """준비된 라벨마다 3초 조각 확률의 최댓값과 조각 수를 구한다. 준비 안 된 라벨은 결과에 없다.
+    """준비된 라벨마다 3초 조각 확률의 최댓값, 조각 수, 조각별 (시작초, 확률) 목록을 구한다. 준비 안 된 라벨은 결과에 없다.
     음량을 잴 수 없는 조각(조각 단위 음량 맞추기에서 거의 무음)은 건너뛰고, 남는 조각이 없으면 확률 0이다."""
     import torch
     out = {}
     for label, (model, cfg) in cnn_models.items():
         y = audio_prep.load(audio_path, cfg)
-        mels = [audio_prep.logmel(y, s, cfg) for s in audio_prep.starts(y, cfg, cfg['judge_hop_sec'])]
-        mels = [audio_prep.normalize(m, cfg) for m in mels if m is not None]
-        if not mels:
-            out[label] = (0.0, 0)
+        pairs = [(s, audio_prep.logmel(y, s, cfg)) for s in audio_prep.starts(y, cfg, cfg['judge_hop_sec'])]
+        pairs = [(s, audio_prep.normalize(m, cfg)) for s, m in pairs if m is not None]
+        if not pairs:
+            out[label] = (0.0, 0, [])
             continue
         with torch.no_grad():
-            p = torch.sigmoid(model(torch.from_numpy(np.stack(mels)).float().unsqueeze(1))).max().item()
-        out[label] = (p, len(mels))
-    print(f"[CNN] {out}")
+            probs = torch.sigmoid(model(torch.from_numpy(np.stack([m for _, m in pairs])).float().unsqueeze(1))).reshape(-1).tolist()
+        out[label] = (max(probs), len(pairs), [(s, p) for (s, _), p in zip(pairs, probs)])
+    print(f"[CNN] { {k: v[:2] for k, v in out.items()} }")
     return out
 
 
@@ -618,7 +619,7 @@ def analyze():
         model_status = {label: cnn_models[label][1].get('status', 'ready') if label in cnn_models else 'pending'
                         for label in CNN_LABELS}
         stability, continuity, calm = cnn_scores['tremor'], cnn_scores['prolongation'], cnn_scores['energy']
-        window_count = max((n for _, n in cnn_result.values()), default=0)
+        window_count = max((n for _, n, _ in cnn_result.values()), default=0)
 
         # 2) 채움말 (librosa + Whisper) → 발화 유창성
         filler_result = analyze_filler(tmp_path, whisper_model=whisper_model, calibration=calibration)
@@ -627,6 +628,19 @@ def analyze():
         # 3) 멈춤 (librosa) → 침묵 조절력
         pause_result = analyze_pause(tmp_path, calibration=calibration)
         pause_ctrl = pause_result['pause_score']
+
+        # 4) 결과 리포트 화면용 세부 값. 부가 기능이라 실패해도 분석 응답은 그대로 보낸다
+        report_detail = {}
+        try:
+            y_report, sr_report = librosa.load(tmp_path, sr=16000, mono=True)
+            report_detail = build_report_detail(
+                y_report, sr_report, filler_result['events'], pause_result['events'], filler_result.get('words', []),
+                {label: {'windows': cnn_result[label][2], 'threshold': cnn_models[label][1]['threshold'],
+                         'win_sec': cnn_models[label][1]['win_sec']} for label in cnn_result},
+            )
+        except Exception:
+            import traceback
+            print(f"[WARNING] report_detail 생성 실패: {traceback.format_exc()}")
 
         # 로그인한 유저의 결과만 저장 (3단계 난이도 산정용). 로그인 없이도 분석 자체는
         # 되게 두고, 저장이 실패해도 분석 응답은 정상 반환한다 — 저장은 부가 기능.
@@ -671,6 +685,7 @@ def analyze():
                 'filler_count':       filler_result['filler_count'],
                 'sound_segment_count': filler_result['sound_segment_count'],
                 'filler_ratio_pct':   round(filler_result['filler_ratio'] * 100, 1),
+                'events':             report_detail.get('filler_events'),
             },
             'pause_detail': {
                 'pause_count':             pause_result['pause_count'],
@@ -678,7 +693,12 @@ def analyze():
                 'anxious_pause_total_sec': pause_result['anxious_pause_total_sec'],
                 'anxious_pause_ratio':     pause_result['anxious_pause_ratio'],
                 'total_duration_sec':      pause_result['total_duration_sec'],
+                'long_pauses':             report_detail.get('long_pauses'),
             },
+            # 값이 없으면 null → 프론트 최종 리포트는 '준비 중' 칸으로 보인다
+            'prolong_detail': report_detail.get('prolong_detail'),
+            'energy_detail':  report_detail.get('energy_detail'),
+            'tremor_detail':  report_detail.get('tremor_detail'),
             'cnn_window_count': window_count,
             'demo_mode': not cnn_models,
         })
