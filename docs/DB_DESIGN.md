@@ -129,6 +129,7 @@ AI(Anthropic)로는 **면접 답변 텍스트가 전송**된다. 처음엔 면�
 ## 인증 연동
 
 - 로그인(`/api/login`) 시 JWT 발급, payload에 `user_id` 포함, 7일 만료
+- 로그인 없이 시작(`/api/guest`)하면 `User`에 게스트 행을 만든다 — 이메일 `guest-<16자리 hex>@guest.reborn.invalid`, 이름 `게스트`, 무작위 비밀번호(로그인 불가), `terms_agreed=False`. 컬럼 추가 없이 이메일 도메인으로 구분하고, 토큰은 30일 만료
 - `get_current_user()` — `Authorization: Bearer <token>` 헤더 검증 후 `User` 반환.
   없거나 무효하면 `None`
 - **2026-09 변경**: `/analyze/gaze-blink`가 원래 인증 검사를 안 했음 (JWT는

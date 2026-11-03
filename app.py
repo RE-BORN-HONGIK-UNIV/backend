@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 load_dotenv(encoding='utf-8')  # .env 파일 읽어서 환경변수로 등록
 
 import base64
+import secrets
 import subprocess
 import tempfile
 import time
@@ -529,15 +530,54 @@ def login():
     if not user or not check_password_hash(user.password_hash, password):
         return jsonify({'error': '이메일 또는 비밀번호가 올바르지 않습니다.'}), 401
 
-    token = jwt.encode(
+    return jsonify({'token': _issue_token(user, days=7), 'name': user.name})
+
+
+def _issue_token(user, days):
+    return jwt.encode(
         {
             'user_id': user.id,
-            'exp': datetime.datetime.utcnow() + datetime.timedelta(days=7),
+            'exp': datetime.datetime.utcnow() + datetime.timedelta(days=days),
         },
         app.config['SECRET_KEY'],
         algorithm='HS256',
     )
-    return jsonify({'token': token, 'name': user.name})
+
+
+# ── 로그인 없이 시작하기 (게스트) ─────────────────────────────────────
+# 1·2·3단계 API(하루 대화, 2단계 저장, 면접 기록, 코치 노트 등)는 기록을 사람별로 묶고 AI 호출을 사람별로
+# 제한하려고 로그인을 요구한다. 로그인 없이 시작하게 하려고 그 API들을 하나하나 풀면 기록을 묶을 곳이 없어서,
+# 대신 "이름 없는 계정"을 만들어 토큰을 준다 — 이후 흐름은 로그인한 사용자와 똑같이 동작한다.
+# - User 테이블을 그대로 쓴다(컬럼 추가 없음 — 마이그레이션 도구가 없어 기존 DB에 컬럼을 못 붙임).
+#   게스트는 이메일 도메인으로 구분한다. .invalid는 실제로 쓰일 수 없는 예약 도메인(RFC 2606)이라
+#   진짜 메일 주소와 겹치지 않고, 비밀번호는 아무도 모르는 무작위 값이라 이 계정으로 로그인할 수는 없다.
+# - 토큰은 30일 — 게스트는 다시 로그인할 방법이 없어서 토큰이 만료되면 기록을 이어 볼 수 없다.
+#   로그인 토큰(7일)보다 길게 두되, 버려진 토큰이 무기한 살아 있지 않게 기간은 둔다.
+# - 계정이 무한정 만들어지지 않게 IP당 시간당 20개로 제한(같은 와이파이를 쓰는 여러 명은 고려한 값).
+GUEST_EMAIL_DOMAIN = 'guest.reborn.invalid'
+GUEST_TOKEN_DAYS = 30
+_guest_limiter = RateLimiter(limit=20)
+
+
+def _client_ip():
+    # Render는 프록시 뒤라 실제 접속 IP가 X-Forwarded-For 첫 번째 값으로 온다
+    forwarded = request.headers.get('X-Forwarded-For', '')
+    return forwarded.split(',')[0].strip() or request.remote_addr or 'unknown'
+
+
+@app.route('/api/guest', methods=['POST'])
+def start_guest():
+    if not _guest_limiter.allow(('guest', _client_ip())):
+        return jsonify({'error': '잠시 뒤에 다시 시도해주세요.'}), 429
+    user = User(
+        email=f'guest-{secrets.token_hex(8)}@{GUEST_EMAIL_DOMAIN}',
+        password_hash=generate_password_hash(secrets.token_urlsafe(32)),
+        name='게스트',
+        terms_agreed=False,
+    )
+    db.session.add(user)
+    db.session.commit()
+    return jsonify({'token': _issue_token(user, days=GUEST_TOKEN_DAYS), 'name': user.name, 'guest': True}), 201
 
 @app.route('/health', methods=['GET'])
 def health():
