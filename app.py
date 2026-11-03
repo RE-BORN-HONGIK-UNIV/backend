@@ -634,7 +634,7 @@ def analyze():
         try:
             y_report, sr_report = librosa.load(tmp_path, sr=16000, mono=True)
             report_detail = build_report_detail(
-                y_report, sr_report, filler_result['events'], pause_result['events'], filler_result.get('words', []),
+                y_report, sr_report, filler_result['events'], pause_result['events'], filler_result['words'],
                 {label: {'windows': cnn_result[label][2], 'threshold': cnn_models[label][1]['threshold'],
                          'win_sec': cnn_models[label][1]['win_sec']} for label in cnn_result},
             )
