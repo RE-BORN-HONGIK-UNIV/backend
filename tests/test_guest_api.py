@@ -63,3 +63,17 @@ def test_guest_creation_is_rate_limited_per_ip(client, app_module):
     assert client.post("/api/guest", headers=headers).status_code == 429
     # 다른 IP는 영향 없음
     assert client.post("/api/guest", headers={"X-Forwarded-For": "198.51.100.2"}).status_code == 201
+
+
+def test_guest_sets_nickname_and_it_is_kept_on_the_account(client, app_module):
+    token = client.post("/api/guest").get_json()["token"]
+    auth = {"Authorization": f"Bearer {token}"}
+    assert client.put("/api/me/nickname", json={"nickname": "  하늘  "}).status_code == 401
+    assert client.put("/api/me/nickname", json={"nickname": "   "}, headers=auth).status_code == 400
+    assert client.put("/api/me/nickname", json={"nickname": "가" * 21}, headers=auth).status_code == 400
+    res = client.put("/api/me/nickname", json={"nickname": "  하늘  "}, headers=auth)
+    assert res.status_code == 200 and res.get_json() == {"name": "하늘"}
+    # 서버 계정에 저장돼 커뮤니티 작성자 이름 등에 그대로 쓰인다
+    post = client.post("/community/posts", json={"title": "안녕", "content": "처음 왔어요"}, headers=auth)
+    assert post.status_code == 201
+    assert post.get_json()["author"] == "하늘"

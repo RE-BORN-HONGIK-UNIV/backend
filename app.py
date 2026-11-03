@@ -579,6 +579,27 @@ def start_guest():
     db.session.commit()
     return jsonify({'token': _issue_token(user, days=GUEST_TOKEN_DAYS), 'name': user.name, 'guest': True}), 201
 
+
+# 웹에서 불러 줄 이름 — 게스트는 "무료로 시작하기" 직후 닉네임 창에서 정한다(회원은 가입할 때 받은 닉네임).
+# User.nickname에 저장해서 다른 기기·새로고침·훈련 끝까지 유지되고, 커뮤니티 작성자 이름에도 그대로 쓰인다.
+NICKNAME_MAX_LEN = 20
+
+
+@app.route('/api/me/nickname', methods=['PUT'])
+def set_nickname():
+    user = get_current_user()
+    if user is None:
+        return jsonify({'error': '로그인이 필요합니다'}), 401
+    nickname = ((request.get_json(silent=True) or {}).get('nickname') or '')
+    nickname = nickname.strip() if isinstance(nickname, str) else ''
+    if not nickname:
+        return jsonify({'error': '불러 드릴 이름을 입력해주세요.'}), 400
+    if len(nickname) > NICKNAME_MAX_LEN:
+        return jsonify({'error': f'이름은 {NICKNAME_MAX_LEN}자까지 쓸 수 있어요.'}), 400
+    user.nickname = nickname
+    db.session.commit()
+    return jsonify({'name': nickname})
+
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({
