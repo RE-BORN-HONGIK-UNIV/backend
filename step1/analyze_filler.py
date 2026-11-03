@@ -398,6 +398,9 @@ def analyze_filler(audio_path, whisper_model=None, total_duration_sec=None, cali
         "fluency_score": score,
         "sound_segment_count": sound_segment_count,
         "filler_ratio": round(filler_ratio, 4),
+        # Whisper 단어 목록({text, start, end}) — 리포트에서 연장 구간의 단어를 고를 때 쓴다(step1/report_detail.py).
+        # 답변 내용이 그대로 들어 있으니 로그에 남기지 말 것
+        "words": word_segments,
     }
 
 

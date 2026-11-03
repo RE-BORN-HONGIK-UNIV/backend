@@ -7,3 +7,5 @@ venv/
 instance/
  
  
+# 1단계 CNN 모델 폴더 (손으로 넣음)
+models/

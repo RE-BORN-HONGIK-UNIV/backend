@@ -17,7 +17,7 @@ Pillow==10.4.0
 # step1 — 음성(채움말/멈춤/CNN)
 librosa==0.10.2.post1
 torch==2.4.1+cpu
-torchvision==0.19.1+cpu
+pyloudnorm==0.2.0  # CNN 입력 음량 맞추기(step1/audio_prep.py)
 openai-whisper==20250625
 
 # step1/step3 — LLM 코칭 피드백·면접 질문 생성 (선택, 키 없으면 자동 폴백)

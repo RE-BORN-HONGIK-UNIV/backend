@@ -32,6 +32,8 @@ VOICE_IDS = {
     "warmup": os.environ.get("TYPECAST_VOICE_WARMUP"),
     "standard": os.environ.get("TYPECAST_VOICE_STANDARD"),
     "practice": os.environ.get("TYPECAST_VOICE_PRACTICE"),
+    # 1·2단계 대화 상대 하루(경량 웹과 같은 "서현" 목소리). 목소리 ID는 비밀이 아니라 기본값으로 둔다.
+    "haru": os.environ.get("TYPECAST_VOICE_HARU") or "tc_69f2e455ea79fd197aa0476f",
 }
 DEFAULT_TIER = "standard"
 
