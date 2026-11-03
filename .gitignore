@@ -7,5 +7,5 @@ venv/
 instance/
  
  
-# 1단계 CNN 모델 폴더 (손으로 넣음)
-models/
+# 1단계 CNN 모델은 작아서(라벨당 250KB) 배포까지 같이 가도록 git에 올린다
+!models/*/model.pth
