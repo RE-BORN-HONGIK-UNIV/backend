@@ -209,3 +209,32 @@ def test_fallback_still_works_when_every_fixed_question_was_asked_before():
     # 고정 질문은 난이도당 3개뿐이라 지난 면접에서 다 나왔을 수 있다 — 그래도 질문은 나와야 한다
     pool = FALLBACK_QUESTIONS["practice"]
     assert _fallback_question("practice", [], "main", list(pool)) in pool
+
+
+# ── 하루와 나눈 이야기(about_me) ─────────────────────────────────────
+
+from step3.interview_question import MAX_ABOUT_ITEMS, MAX_ABOUT_LEN, _about_section, clean_about_me  # noqa: E402
+
+
+def test_clean_about_me_drops_junk_and_clips():
+    out = clean_about_me(["관심사:  요리 ", "", 3, None, "가" * 200] + ["x"] * 20)
+    assert out[0] == "관심사: 요리"
+    assert len(out[1]) == MAX_ABOUT_LEN
+    assert len(out) == MAX_ABOUT_ITEMS
+
+
+def test_clean_about_me_rejects_non_list_and_crisis_content():
+    assert clean_about_me("관심사: 요리") == []
+    assert clean_about_me(["관심사: 요리", "걱정: 죽고 싶다는 생각"]) == []
+
+
+def test_about_section_only_for_main_questions():
+    assert _about_section(["관심사: 요리"], "follow_up") == ""
+    assert _about_section([], "main") == ""
+    s = _about_section(["관심사: 요리"], "main")
+    assert "- 관심사: 요리" in s and "걱정은 질문 소재로 쓰지" in s
+
+
+def test_user_prompt_includes_about_me_section():
+    p = _user_prompt("standard", [], None, "main", about_me=["해 본 일: 편의점 아르바이트"])
+    assert "편의점 아르바이트" in p
