@@ -1,0 +1,19 @@
+{
+  "label": "energy",
+  "sr": 16000,
+  "lufs": -23,
+  "win_sec": 3.0,
+  "judge_hop_sec": 1.0,
+  "n_fft": 512,
+  "win_length": 400,
+  "hop_length": 160,
+  "n_mels": 64,
+  "fmin": 50,
+  "fmax": 7000,
+  "db_floor": -60,
+  "lufs_scope": "window",
+  "size": "small",
+  "mean": -36.217124938964844,
+  "std": 17.08835220336914,
+  "threshold": 0.4962533414363861
+}
