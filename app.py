@@ -13,6 +13,7 @@ import base64
 import secrets
 import subprocess
 import tempfile
+import threading
 import time
 import numpy as np
 import librosa
@@ -318,6 +319,9 @@ CNN_LABELS = ('prolongation', 'tremor', 'energy')
 cnn_models = {}  # label -> (model, cfg). 없는 라벨은 pending
 whisper_model = None
 _models_loaded = False
+# 서버가 켜질 때 뒤에서 미리 불러오는 동안 요청이 들어와도(PRELOAD_MODELS) 반쯤 불린 모델을 쓰지 않게 —
+# 먼저 온 쪽이 다 불러올 때까지 다른 쪽은 기다린다
+_models_lock = threading.Lock()
 
 def load_models():
     """CNN/Whisper 모델 로드 — 최초 요청 시점에 한 번만 실행되는 지연 로딩.
@@ -328,7 +332,15 @@ def load_models():
     global whisper_model, WHISPER_AVAILABLE, _models_loaded
     if _models_loaded:
         return
-    _models_loaded = True
+    with _models_lock:
+        if _models_loaded:
+            return
+        _load_models_locked()
+        _models_loaded = True
+
+
+def _load_models_locked():
+    global whisper_model, WHISPER_AVAILABLE
 
     for label in CNN_LABELS:
         folder = os.path.join(MODELS_DIR, label)
@@ -363,6 +375,13 @@ def load_models():
             print("[OK] Whisper 모델 로드 완료")
         except Exception as e:
             print(f"[ERROR] Whisper 로드 실패: {e}")
+
+# PRELOAD_MODELS=1이면 서버가 켜지자마자 뒤에서 모델을 불러 둔다 — 안 그러면 첫 사용자가 1단계 마이크 확인에서
+# torch·CNN·Whisper를 다 올릴 때까지(1~3분) 기다린다. 메모리가 넉넉한 플랜(2GB 이상)에서만 켤 것:
+# 무료(512MB)에서 켜면 켜지자마자 메모리 초과로 서버가 꺼진다. 기본은 꺼짐(로컬·무료 그대로).
+if os.environ.get('PRELOAD_MODELS') == '1':
+    threading.Thread(target=load_models, name='preload-models', daemon=True).start()
+
 
 def save_temp_file(file_storage):
     """Windows 호환 임시 파일 저장"""

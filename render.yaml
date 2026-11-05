@@ -6,14 +6,25 @@ services:
   - type: web
     name: reborn-backend
     runtime: python
-    plan: free
+    # 2026-11: 무료(512MB)는 목소리 분석 모델(torch·CNN·Whisper)을 올리다 메모리 초과로 꺼져서 Standard(1 CPU·2GB)로 올림.
+    # 발표(11/16) 뒤 비용을 줄이려면 대시보드에서 free로 내리고 PRELOAD_MODELS도 지울 것(무료에서 켜 두면 켜지자마자 꺼짐)
+    plan: standard
     region: singapore
     branch: main
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 120"
+    # Whisper 모델(~140MB)을 빌드할 때 미리 받아 둔다 — 안 그러면 서버가 새로 켜질 때마다 첫 분석에서 받느라 오래 걸린다.
+    # 받는 위치를 XDG_CACHE_HOME(아래)으로 프로젝트 폴더 안에 둬야 빌드에서 받은 파일이 실행 때도 남는다.
+    buildCommand: "pip install -r requirements.txt && python -c \"import whisper; whisper.load_model('base')\""
+    # 첫 분석은 모델을 올리느라 오래 걸려서 timeout을 넉넉히(2026-11, 120초면 첫 마이크 확인이 끊길 수 있었음)
+    startCommand: "gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 300"
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
+      # Whisper 모델 저장 위치 — 프로젝트 폴더 안(빌드에서 받은 게 실행 때도 남게)
+      - key: XDG_CACHE_HOME
+        value: /opt/render/project/src/.cache
+      # 서버가 켜지자마자 뒤에서 모델을 불러 둔다(app.py). 2GB 이상 플랜에서만 1 — 무료 512MB에서 켜면 메모리 초과
+      - key: PRELOAD_MODELS
+        value: "1"
       # reborn-db가 region 미지정으로 기본값(oregon)에 생성됐는데 이 웹 서비스는
       # singapore라 리전이 갈렸다. Render의 내부 커넥션 문자열(호스트명이
       # "dpg-...-a"뿐인 짧은 형태)은 같은 리전 사설망 안에서만 DNS가 풀려서,
