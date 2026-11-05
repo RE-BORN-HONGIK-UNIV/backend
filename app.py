@@ -65,13 +65,17 @@ from step1.report_detail import build_report_detail
 from step1.llm_feedback import generate_feedback
 
 # Step1 CNN 입력 손질 (voice-cnn/src/audio_prep.py 복사본 — 학습과 똑같이 손질해야 함)
-from step1 import audio_prep
+from step1 import audio_prep, energy_rule
 
 # Step1 종합 점수 (Stage1Result에 저장할 값 — 프론트 overallScore와 동일 공식)
 from step1.stage1_score import overall_score as stage1_overall_score
 
 # Step3 면접 질문 생성 (선택적 — 키 없으면 자동 폴백)
 from step3.interview_question import clean_about_me, generate_question
+
+# Step3 불안도 → 난이도 (연구 근거 가중치, 사용자에게 안 보임)
+from step3.anxiety import anxiety_score, tier as anxiety_tier
+from step3.anxiety import blink_item as anxiety_blink_item, gaze_item as anxiety_gaze_item
 
 # 면접 직후 코치 노트 에이전트 (이력 조회 도구 + 검증 + 대체 노트)
 from coach.agent import MODEL as COACH_MODEL, generate_note as generate_coach_note
@@ -501,7 +505,16 @@ def predict_cnn(audio_path):
             continue
         with torch.no_grad():
             probs = torch.sigmoid(model(torch.from_numpy(np.stack([m for _, m in pairs])).float().unsqueeze(1))).reshape(-1).tolist()
+        if 'fade_db' in cfg:
+            # 에너지: 조각 안에서 실제로 fade_db 이상 작아진 조각만 인정 (step1/energy_rule.py)
+            n = int(cfg['win_sec'] * cfg['sr'])
+            probs = [p if energy_rule.faded(y[int(round(s * cfg['sr'])):int(round(s * cfg['sr'])) + n], cfg['fade_db']) else 0.0
+                     for (s, _), p in zip(pairs, probs)]
         out[label] = (max(probs), len(pairs), [(s, p) for (s, _), p in zip(pairs, probs)])
+    if 'energy' in out and 'prolongation' in out and 'fade_db' in cnn_models['energy'][1]:
+        # 에너지: 연장으로 잡힌 조각은 뺀다 (말 늘이기를 작아짐으로 헷갈리는 오탐)
+        wins = energy_rule.drop_prolonged(out['energy'][2], out['prolongation'][2], cnn_models['prolongation'][1]['threshold'])
+        out['energy'] = (max((p for _, p in wins), default=0.0), out['energy'][1], wins)
     print(f"[CNN] { {k: v[:2] for k, v in out.items()} }")
     return out
 
@@ -1022,6 +1035,26 @@ def get_latest_stage2():
         }
     })
 # ▲▲▲ [추가 끝] ▲▲▲
+
+
+@app.route('/interview/anxiety', methods=['GET'])
+def get_anxiety():
+    """1·2단계 최신 결과로 불안도와 3단계 난이도를 낸다(step3/anxiety.py). 사용자 화면에는 난이도만 쓴다.
+    결과가 없는 단계의 항목은 빠지고, 둘 다 없으면 score는 None, 난이도는 가장 쉬운 warmup."""
+    user = get_current_user()
+    if user is None:
+        return jsonify({'error': '로그인이 필요합니다'}), 401
+
+    s1 = Stage1Result.query.filter_by(user_id=user.id).order_by(Stage1Result.created_at.desc()).first()
+    s2 = Stage2Result.query.filter_by(user_id=user.id).order_by(Stage2Result.created_at.desc()).first()
+    items = {}
+    if s1:
+        items.update(pause=s1.pause_ctrl, filler=s1.fluency, prolong=s1.continuity, energy=s1.calm, tremor=s1.stability)
+    if s2:
+        items.update(gaze=anxiety_gaze_item(s2.avg_fixation_sec), blink=anxiety_blink_item(s2.blink_rate_per_min),
+                     tension=100 * (1 - s2.tension_ratio))
+    score = anxiety_score(items)
+    return jsonify({'score': score, 'tier': anxiety_tier(score), 'items': items})
 
 @app.route('/community/posts', methods=['GET'])
 def list_posts():

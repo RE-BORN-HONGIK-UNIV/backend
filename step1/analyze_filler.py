@@ -36,6 +36,7 @@ import librosa
 # -----------------------------------------------------------------------------
 
 ACOUSTIC_MIN_DUR = 0.12    # 음향 기반 채움말 후보 최소 길이 (짧은 잡음 제거용)
+MIN_RATE_DURATION_SEC = 30.0  # 분당 개수를 낼 때 답변 길이의 최솟값 (analyze_pause.py와 같음)
 LIBROSA_TOP_DB = 30        # 비무음 구간 분리 임계값 (librosa 기본 60dB보다 공격적)
 
 ZCR_TOLERANCE_RATIO = 1.5     # 개인 채움말 ZCR 기준값의 이 배수 이내면 인정
@@ -78,7 +79,8 @@ def get_word_segments(audio_path_or_array, whisper_model):
     for segment in result.get("segments", []):
         for word in segment.get("words", []):
             text = _normalize_word(word.get("word", ""))
-            if text:
+            # 길이 0인 단어는 늘인 소리에서 Whisper가 같은 글자를 반복해 지어낸 것(지인 녹음에서 "그" 23·100여 개)
+            if text and float(word["end"]) > float(word["start"]):
                 words.append({
                     "text": text,
                     "start": float(word["start"]),
@@ -366,7 +368,8 @@ def analyze_filler(audio_path, whisper_model=None, total_duration_sec=None, cali
         total_duration_sec = word_segments[-1]["end"] if word_segments else len(y) / sr
     total_duration_sec = max(float(total_duration_sec), 0.001)  # 0초 파일 등 예외 방어
 
-    filler_rate_per_min = len(scored_events) / (total_duration_sec / 60.0)
+    # 짧은 답에서 한 번의 "음"이 분당 12개처럼 부풀지 않게 최소 30초로 나눈다
+    filler_rate_per_min = len(scored_events) / (max(total_duration_sec, MIN_RATE_DURATION_SEC) / 60.0)
     sound_segment_count = len(sound_intervals)
     filler_ratio = len(scored_events) / sound_segment_count if sound_segment_count else 0.0
 
