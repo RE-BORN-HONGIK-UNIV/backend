@@ -9,12 +9,12 @@ Step 3 · 불안도와 실전 면접 난이도 (순수 함수).
 from __future__ import annotations
 
 WEIGHTS = {
-    "pause": 2.0,       # 긴 멈춤 (1단계 pause_ctrl)
+    "pause": 2.0,       # 침묵 조절력 (1단계 pause_ctrl)
     "gaze": 2.0,        # 시선 (2단계 avg_fixation_sec → gaze_item)
-    "filler": 0.5,      # 채움말 (1단계 fluency)
-    "prolong": 0.5,     # 말끝 늘이기 (1단계 continuity)
-    "energy": 0.5,      # 끝까지 또렷하게 (1단계 calm)
-    "tremor": 0.5,      # 떨림 (1단계 stability)
+    "filler": 0.5,      # 발화 유창성 (1단계 fluency)
+    "prolong": 0.5,     # 발화 지속성 (1단계 continuity)
+    "energy": 0.5,      # 발화 에너지 (1단계 calm)
+    "tremor": 0.5,      # 음성 안정성 (1단계 stability)
     "blink": 0.5,       # 깜빡임 (2단계 blink_rate_per_min → blink_item)
     "tension": 0.5,     # 미간 긴장 (2단계 100 × (1 − tension_ratio))
 }
@@ -40,7 +40,8 @@ def anxiety_score(items: dict) -> float | None:
 
 
 def tier(score: float | None) -> str:
-    """불안도 60 이상 편안(warmup) / 30~60 보통(standard) / 30 미만 도전(practice). 값이 없으면 가장 쉬운 난이도."""
-    if score is None or score >= 60:
+    """불안도 20 이상 편안(warmup) / 10~20 보통(standard) / 10 미만 도전(practice). 값이 없으면 가장 쉬운 난이도.
+    습관 하나가 잡히면 약 7점, 시선을 자주 피하면 약 15점 오른다. 판넬의 60·30은 이 계산식에서 거의 닿지 않아 낮췄다."""
+    if score is None or score >= 20:
         return "warmup"
-    return "standard" if score >= 30 else "practice"
+    return "standard" if score >= 10 else "practice"

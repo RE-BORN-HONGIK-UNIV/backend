@@ -17,7 +17,7 @@ def test_missing_items_drop_out():
 
 
 def test_tier_bounds():
-    assert [tier(s) for s in (None, 60, 59.9, 30, 29.9)] == ["warmup", "warmup", "standard", "standard", "practice"]
+    assert [tier(s) for s in (None, 20, 19.9, 10, 9.9)] == ["warmup", "warmup", "standard", "standard", "practice"]
 
 
 def test_gaze_counts_only_looking_away():
