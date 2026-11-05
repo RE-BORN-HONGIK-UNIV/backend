@@ -1,15 +1,3 @@
----
-title: Reborn Backend
-emoji: 🌱
-colorFrom: green
-colorTo: purple
-sdk: docker
-app_port: 7860
-pinned: false
----
-
-<!-- 위 앞머리는 Hugging Face Spaces 설정이다(Docker로 7860 포트에서 실행 — Dockerfile 참고). GitHub에서는 표로 보일 뿐 영향 없음 -->
-
 # Re-born · backend
 
 발화 불안·사회불안을 가진 고립·은둔 청년을 위한 AI 기반 디지털 재활 웹앱의 Flask 백엔드.
