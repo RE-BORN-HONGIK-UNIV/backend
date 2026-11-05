@@ -5,29 +5,73 @@
 `GET /interview/anxiety` (로그인 필요, `Authorization: Bearer <token>`)
 
 ```json
-{ "score": 42.3, "tier": "standard", "items": { "pause": 70, "gaze": 55, "filler": 80, "...": 0 } }
+{
+  "score": 42.3,
+  "tier": "standard",
+  "items": { "pause": 70, "filler": 80, "prolong": 100, "energy": 90, "tremor": 100,
+             "gaze": 55, "blink": 100, "tension": 92 }
+}
 ```
 
 - `tier`: `warmup`(편안) / `standard`(보통) / `practice`(도전). 화면은 이 값만 쓰면 된다. 프론트 `difficulty.ts`의 `DifficultyTier`와 이름이 같다.
-- `score`: 불안도 0~100, **높을수록 긴장**. 사용자에게 보여 주지 않는다. 1·2단계 결과가 모두 없으면 `null`이고 `tier`는 `warmup`.
-- 기존 `combineAnxietyScore`(1단계 평균 × 0.6 + 2단계 평균 × 0.4, 높을수록 안정)를 대신한다.
+- `score`: 불안도 0~100, **높을수록 긴장**. 사용자에게 보여 주지 않는다.
+- `items`: 계산에 쓴 항목 점수(0~100, 높을수록 안정). 1단계나 2단계 기록이 없으면 그 단계 항목이 빠지고 남은 항목으로 계산한다. 둘 다 없으면 `score`는 `null`, `tier`는 `warmup`.
 
 ## 계산식 (`step3/anxiety.py`, 판넬과 같음)
 
 불안도 = Σ 가중치 × (100 − 항목 점수) ÷ (값이 있는 항목의 가중치 합)
 
-| 항목 | 저장된 값 | 가중치 | 이유 |
-|---|---|---|---|
-| 긴 멈춤 | 1단계 pause_ctrl | 2 | 불안과의 관련 근거가 비교적 강함 (Laukka et al. 2008) |
-| 시선 | 2단계 avg_fixation_sec (3초 이상 바라보면 100, 짧으면 깎음) | 2 | 면접 평가와의 관련 근거가 강함 (Burgoon et al. 1985; Frauendorfer et al. 2014) |
-| 채움말 · 말끝 늘이기 · 끝까지 또렷하게 · 떨림 | 1단계 fluency · continuity · calm · stability | 각 0.5 | 근거가 중간~약함 |
-| 깜빡임 · 미간 긴장 | 2단계 blink_rate_per_min (분당 30회 넘을 때만 깎음) · 100 × (1 − tension_ratio) | 각 0.5 | 근거가 약함 |
-| 미소 | — | 0 | 연구 결과가 엇갈림 (Tescari & Bangerter 2024; Ruben et al. 2015) |
+| 등급 | 항목 | 저장된 값 | 가중치 | 근거 |
+|---|---|---|---|---|
+| 핵심 | 긴 멈춤 | 1단계 pause_ctrl | 2 | 사회불안 환자 발표에서 상태 불안과 침묵 비율 r = .36 (Laukka et al. 2008, Teferra et al. 2022의 인용으로 확인) |
+| 핵심 | 시선 피함 | 2단계 avg_fixation_sec (3초 이상 바라보면 100, 짧을수록 깎음) | 2 | 시선 피함 → 채용 의향·신뢰도 하락 (Burgoon et al. 1985), 실제 면접 녹화에서 면접관 응시 → 채용 판단 β = .40 (Frauendorfer et al. 2014) |
+| 보조 | 채움말 | 1단계 fluency | 0.5 | 채움말이 많을수록 자신감·유능함 평가 하락 (Kirkland et al. 2023), 평가 불안·자의식이 'um'을 늘림 (Christenfeld & Creager 1996) |
+| 보조 | 끝까지 또렷하게 | 1단계 calm | 0.5 | 불안할수록 평균 음량이 약간 낮음 (r ≈ −.2, Laukka et al. 2008 인용). "점점 작아짐"을 직접 잰 연구는 없음 |
+| 보조 | 떨림 | 1단계 stability | 0.5 | 발표 불안 척도에 "목소리가 떨리면 끔찍할 것" 문항 (Cho et al. 2004). 음향 지표 연구는 방향이 엇갈림. 모델은 시험 통과(PR-AUC 0.77, 찍기 0.22) |
+| 보조 | 말끝 늘이기 | 1단계 continuity | 0.5 | 직접 연구 없음. 실제 면접 영상에서 자주 보인 습관이라 낮은 비중으로만 넣음 |
+| 보조 | 잦은 깜빡임 | 2단계 blink_rate_per_min (분당 30회 넘을 때만 깎음) | 0.5 | 감정 자극 중 상태 불안과 r = .42 (Tomashin et al. 2025). 말하는 상황 연구는 아님 |
+| 보조 | 미간 긴장 | 2단계 100 × (1 − tension_ratio) | 0.5 | 불안과 직접 연결한 연구는 찾지 못함. 2단계 검증표의 긴장 판정을 씀 |
+| 제외 | 미소 | — | 0 | 미소는 따뜻함↑(Tescari & Bangerter 2024)이지만 진지한 직무에선 덜 웃는 쪽이 유리(Ruben et al. 2015)해 방향이 엇갈림 |
 
-- 핵심 두 항목이 전체 가중치의 약 57%다(4 ÷ 7). 같은 비중으로 두면 근거가 약한 항목이 점수를 끌고 간다.
-- 떨림은 시험(PR-AUC 0.77, 찍기 0.22)을 통과해 0.5로 넣었다.
+- 핵심 두 항목이 전체 가중치의 약 57%다(4 ÷ 7).
 - 시선·깜빡임은 화면 점수를 그대로 쓰지 않는다. 화면 점수는 인상 기준이라 5초 넘게 바라보거나 깜빡임이 적어도 깎지만, 불안 근거는 시선을 피할 때와 깜빡임이 잦을 때뿐이다. 방향이 다른 값을 섞으면 오래 잘 바라본 사람이 긴장한 것으로 계산된다.
 - 경계 60 · 30과 가중치는 초기값이고, 사용자 테스트로 조정한다.
+
+### 왜 이 가중치 방식인가
+
+| 방식 | 판단 |
+|---|---|
+| 같은 비중 | 교과서적 방법이다(Dawes 1979; Bobko et al. 2007). 하지만 근거가 약한 말끝 늘이기·미간도 멈춤과 같은 무게가 된다 |
+| **근거 등급 비중 (채택)** | 근거가 비교적 강한 멈춤·시선 2, 나머지 0.5. 숫자 자체는 초기값이라고 밝힌다 |
+| 논문 효과 크기를 그대로 비중으로 | 연구마다 대상·과제·장비가 달라 숫자를 섞으면 정밀한 척하게 된다 |
+| 실제 데이터로 학습 | 사용자 자기 보고 긴장도(0~10)와 함께 쌓이면 v2에서 비중을 검증·조정한다 |
+
+- 측정이 틀려 불안도가 높게 나오면 더 쉬운 난이도가 된다. 이 서비스에선 안전한 쪽의 실수다.
+- 한계: 항목마다 점수가 움직이는 폭이 달라(CNN 점수는 0~100, 멈춤은 대체로 70~100) 실제 영향력이 2 : 0.5와 정확히 같지는 않다.
+
+### 기존 계산식과의 차이
+
+| | 기존 (`difficulty.ts`) | 새 (`/interview/anxiety`) |
+|---|---|---|
+| 재료 | 1단계 종합 점수, 2단계 종합 점수(깜빡임·시선·표정 평균) | 항목 8개를 따로 |
+| 비중 | 1단계 0.6 : 2단계 0.4 (근거 없음) | 근거 등급 2 : 0.5, 미소 제외 |
+| 점수 방향 | 높을수록 안정 | 높을수록 긴장 |
+| 난이도 경계 | 40 미만 warmup, 70 미만 standard, 이상 practice | 60 이상 warmup, 30~60 standard, 30 미만 practice |
+
+### 참고문헌
+
+- Bobko, P., Roth, P. L., & Buster, M. A. (2007). The usefulness of unit weights in creating composite scores. *Organizational Research Methods*, 10(4), 689–709.
+- Burgoon, J. K., Manusov, V., Mineo, P., & Hale, J. L. (1985). Effects of gaze on hiring, credibility, attraction and relational message interpretation. *Journal of Nonverbal Behavior*, 9(3), 133–146. https://doi.org/10.1007/BF01000735
+- Cho, Y., Smits, J. A. J., & Telch, M. J. (2004). The Speech Anxiety Thoughts Inventory. *Behaviour Research and Therapy*, 42, 13–25.
+- Christenfeld, N., & Creager, B. (1996). Anxiety, alcohol, aphasia, and ums. *Journal of Personality and Social Psychology*, 70(3), 451–460.
+- Dawes, R. M. (1979). The robust beauty of improper linear models in decision making. *American Psychologist*, 34(7), 571–582.
+- Frauendorfer, D., Schmid Mast, M., Nguyen, L. S., & Gatica-Perez, D. (2014). Nonverbal social sensing in action. *Journal of Nonverbal Behavior*, 38(2), 231–245. https://doi.org/10.1007/s10919-014-0173-5
+- Kirkland, A., Gustafson, J., & Székely, É. (2023). Pardon my disfluency. *Proc. Interspeech 2023*, 5217–5221.
+- Laukka, P., Linnman, C., Åhs, F., et al. (2008). In a nervous voice: Acoustic analysis and perception of anxiety in social phobics' speech. *Journal of Nonverbal Behavior*, 32(4), 195–214. (수치는 Teferra et al. 2022의 인용으로 확인)
+- Teferra, B. G., et al. (2022). Acoustic and linguistic features of impromptu speech and their association with anxiety: Validation study. *JMIR Mental Health*, 9(7), e36828.
+- Ruben, M. A., Hall, J. A., & Schmid Mast, M. (2015). Smiling in a job interview: When less is more. *The Journal of Social Psychology*, 155(2), 107–126.
+- Tescari, M.-E., & Bangerter, A. (2024). Nonverbal behavior in selection interviews: Relation to communion, agency, and interview performance. *Journal of Personnel Psychology*. https://doi.org/10.1027/1866-5888/a000350
+- Tomashin et al. (2025). *PLOS ONE*, 20(12), e0338262. https://pmc.ncbi.nlm.nih.gov/articles/PMC12694841/
 
 ## 에너지(작아짐) 조각 판정 규칙 (`step1/energy_rule.py`)
 
