@@ -664,6 +664,11 @@ def analyze():
         except (ValueError, TypeError):
             print("[WARNING] calibration 파싱 실패, 무시하고 진행")
 
+    # 어느 단계의 녹음인지 — 1단계일 때만 Stage1Result로 저장한다(step1/analyze_options.py 참고).
+    # 3단계 면접 대답도 같은 분석으로 리포트의 1→2→3단계 흐름·질문별 말버릇 표시를 채운다.
+    from step1.analyze_options import parse_analyze_stage, saves_stage1_result
+    stage = parse_analyze_stage(request.form.get('stage'))
+
     tmp_path = None
     try:
         tmp_path = save_temp_file(f)
@@ -708,7 +713,7 @@ def analyze():
         # 되게 두고, 저장이 실패해도 분석 응답은 정상 반환한다 — 저장은 부가 기능.
         # CNN 세 모델이 모두 준비됐을 때만 저장한다 (빈 점수는 저장할 수 없고 난이도를 왜곡한다).
         user = get_current_user()
-        if user is not None and len(cnn_models) == len(CNN_LABELS):
+        if saves_stage1_result(stage) and user is not None and len(cnn_models) == len(CNN_LABELS):
             try:
                 scores_to_save = {
                     'stability': stability, 'fluency': fluency, 'pause_ctrl': pause_ctrl,
@@ -763,6 +768,10 @@ def analyze():
             'tremor_detail':  report_detail.get('tremor_detail'),
             'cnn_window_count': window_count,
             'demo_mode': not cnn_models,
+            # Whisper가 받아쓴 단어와 녹음 안 시각 — 3단계 리포트의 질문별 말버릇·멈춤 표시를 실제 위치에 놓는 데 쓴다.
+            # 대답 내용이라 민감정보: 응답으로만 돌려주고 로그·DB에는 남기지 않는다.
+            'words': [{'text': w['text'], 'start': round(w['start'], 2), 'end': round(w['end'], 2)}
+                      for w in filler_result.get('words', [])],
         })
 
     except Exception as e:
