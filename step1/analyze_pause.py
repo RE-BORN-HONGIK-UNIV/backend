@@ -12,10 +12,11 @@ Step1 · 멈춤(pause) 분석
 근거 요약
 - Goldman-Eisler(1968), De Jong & Bosker(2013): 250ms는 조음성 짧은
   공백과 분석 대상 침묵을 구분하는 대표적 하한값이다.
-- Frontiers in Psychology(2022): 영어 문장부호 위치의 계획된 휴지에서
-  0.6초 및 0.6~1.2초가 자연스러움 평가와 관련됨.
+- Yoo & Shin(2019): 한국어 자유발화의 발화 안 휴지 평균 526ms, 2초 이상은 비유창.
+- Campione & Véronis(2002): 1초를 넘는 긴 쉼은 자유발화에서만 따로 나타남.
 - 자체 정상 발화 무음 463개 분석: 평균 0.342초, 평균+1σ = 0.597초.
   오탐을 줄이는 보수적 기준으로 1.2초 이상을 긴 멈춤으로 설정했다.
+  자세한 근거: docs/pause_threshold_근거.md
 
 주의
 - 긴 멈춤은 불안을 단독 진단하는 기준이 아니다.
@@ -36,6 +37,9 @@ LONG_PAUSE_THRESHOLD = 1.2
 # 1.2초 이상 발화 내부 무음은 '긴 멈춤'으로 분류.
 # 문헌의 계획된 문장 경계 쉼 범위와 자체 정상 발화 무음 분포를 참고한
 # 보수적 초기값이며, 실제 서비스 녹음으로 재검증·보정한다.
+
+MIN_RATE_DURATION_SEC = 30.0
+# 분당 빈도·비율을 낼 때 답변 길이의 최솟값. 5초 답에서 멈춤 한 번이 분당 12번으로 부풀지 않게 한다.
 
 SILENCE_TOP_DB = 30
 # librosa.effects.split의 상대 음량 기반 비무음 구간 분리 기준.
@@ -156,9 +160,11 @@ def analyze_pause(audio_path, total_duration_sec=None, calibration=None):
             event["duration"] for event in long_pause_events
         )
 
-        pause_rate_per_min = pause_count / (total_duration / 60.0)
-        long_pause_rate_per_min = long_pause_count / (total_duration / 60.0)
-        long_pause_ratio = long_pause_total_sec / total_duration
+        # 짧은 답에서 멈춤 한 번이 크게 부풀지 않게 최소 30초로 나눈다
+        rate_duration = max(total_duration, MIN_RATE_DURATION_SEC)
+        pause_rate_per_min = pause_count / (rate_duration / 60.0)
+        long_pause_rate_per_min = long_pause_count / (rate_duration / 60.0)
+        long_pause_ratio = long_pause_total_sec / rate_duration
 
         score = _calculate_pause_score(
             long_pause_rate_per_min=long_pause_rate_per_min,
