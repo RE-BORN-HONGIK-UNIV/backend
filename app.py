@@ -75,7 +75,7 @@ from step3.interview_question import clean_about_me, generate_question
 
 # Step3 불안도 → 난이도 (연구 근거 가중치, 사용자에게 안 보임)
 from step3.anxiety import anxiety_score, tier as anxiety_tier
-from step3.anxiety import blink_item as anxiety_blink_item, gaze_item as anxiety_gaze_item
+from step3.anxiety import blink_item as anxiety_blink_item, gaze_item as anxiety_gaze_item, worse as anxiety_worse
 
 # 면접 직후 코치 노트 에이전트 (이력 조회 도구 + 검증 + 대체 노트)
 from coach.agent import MODEL as COACH_MODEL, generate_note as generate_coach_note
@@ -154,6 +154,19 @@ class Stage1Result(db.Model):
             'calm': self.calm,
             'overallScore': self.overall_score,
         }
+
+
+class Stage2VoiceResult(db.Model):
+    """2단계 통화 녹음의 목소리 점수 — 3단계 불안도에만 쓴다(1단계 점수·대시보드는 그대로).
+    Stage1Result에 단계 칸을 더하면 이미 배포된 DB에는 create_all로 반영되지 않아 새 표로 둔다."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    stability = db.Column(db.Float, nullable=False)
+    fluency = db.Column(db.Float, nullable=False)
+    pause_ctrl = db.Column(db.Float, nullable=False)
+    continuity = db.Column(db.Float, nullable=False)
+    calm = db.Column(db.Float, nullable=False)
 
 
 class Stage2Result(db.Model):
@@ -745,22 +758,26 @@ def analyze():
         # 되게 두고, 저장이 실패해도 분석 응답은 정상 반환한다 — 저장은 부가 기능.
         # CNN 세 모델이 모두 준비됐을 때만 저장한다 (빈 점수는 저장할 수 없고 난이도를 왜곡한다).
         user = get_current_user()
-        if saves_stage1_result(stage) and user is not None and len(cnn_models) == len(CNN_LABELS):
+        # 1단계는 Stage1Result, 2단계 통화 목소리는 Stage2VoiceResult(불안도용), 3단계 대답은 저장하지 않는다.
+        if stage in (1, 2) and user is not None and len(cnn_models) == len(CNN_LABELS):
             try:
                 scores_to_save = {
                     'stability': stability, 'fluency': fluency, 'pause_ctrl': pause_ctrl,
                     'continuity': continuity, 'calm': calm,
                 }
-                db.session.add(Stage1Result(
-                    user_id=user.id,
-                    overall_score=stage1_overall_score(scores_to_save),
-                    **scores_to_save,
-                ))
+                if saves_stage1_result(stage):
+                    db.session.add(Stage1Result(
+                        user_id=user.id,
+                        overall_score=stage1_overall_score(scores_to_save),
+                        **scores_to_save,
+                    ))
+                else:
+                    db.session.add(Stage2VoiceResult(user_id=user.id, **scores_to_save))
                 db.session.commit()
             except Exception:
                 db.session.rollback()
                 import traceback
-                print(f"[WARNING] Stage1Result 저장 실패: {traceback.format_exc()}")
+                print(f"[WARNING] {stage}단계 목소리 결과 저장 실패: {traceback.format_exc()}")
 
         return jsonify({
             'scores': {
@@ -1046,10 +1063,14 @@ def get_anxiety():
         return jsonify({'error': '로그인이 필요합니다'}), 401
 
     s1 = Stage1Result.query.filter_by(user_id=user.id).order_by(Stage1Result.created_at.desc()).first()
+    v2 = Stage2VoiceResult.query.filter_by(user_id=user.id).order_by(Stage2VoiceResult.created_at.desc()).first()
     s2 = Stage2Result.query.filter_by(user_id=user.id).order_by(Stage2Result.created_at.desc()).first()
     items = {}
-    if s1:
-        items.update(pause=s1.pause_ctrl, filler=s1.fluency, prolong=s1.continuity, energy=s1.calm, tremor=s1.stability)
+    voice = [r for r in (s1, v2) if r]
+    if voice:
+        # 목소리 5개는 1·2단계 통화 중 더 긴장한 쪽 값을 쓴다(step3/anxiety.py worse)
+        cols = dict(pause='pause_ctrl', filler='fluency', prolong='continuity', energy='calm', tremor='stability')
+        items.update({k: anxiety_worse(*(getattr(r, c) for r in voice)) for k, c in cols.items()})
     if s2:
         items.update(gaze=anxiety_gaze_item(s2.avg_fixation_sec), blink=anxiety_blink_item(s2.blink_rate_per_min),
                      tension=100 * (1 - s2.tension_ratio))

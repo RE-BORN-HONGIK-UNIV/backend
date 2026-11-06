@@ -30,6 +30,12 @@ def blink_item(rate_per_min: float) -> float:
     return max(0.0, 100 - max(0.0, rate_per_min - 30) * 5)
 
 
+def worse(*scores: float | None) -> float | None:
+    """같은 항목의 1·2단계 점수 중 더 긴장한 쪽(낮은 점수). 판단이 틀려도 쉬운 난이도로 가게 한다."""
+    have = [s for s in scores if s is not None]
+    return min(have) if have else None
+
+
 def anxiety_score(items: dict) -> float | None:
     """값이 있는 항목만으로 불안도를 낸다. 값이 하나도 없으면 None."""
     have = {k: float(v) for k, v in items.items() if k in WEIGHTS and v is not None}
