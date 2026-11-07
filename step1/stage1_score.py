@@ -17,3 +17,12 @@ def overall_score(scores: dict) -> int:
     """5개 축 점수 평균(반올림). 프론트 overallScore()와 동일 (JS Math.round: .5는 올림)."""
     avg = sum(float(scores[k]) for k in SCORE_KEYS) / len(SCORE_KEYS)
     return int(avg + 0.5)
+
+
+def window_score(wins: list, threshold: float) -> float:
+    """CNN 습관 점수: 기준값을 넘은 3초 조각의 비율만큼 깎는다. 가장 높은 조각 하나로 매기면 답변이 길수록
+    점수가 0에 몰리고 오탐 조각 하나에도 크게 깎인다(2026-11 지인 긴 대화로 확인). 조각이 없으면 100."""
+    if not wins:
+        return 100.0
+    hit = sum(1 for _, p in wins if p >= threshold)
+    return round(100 * (1 - hit / len(wins)), 1)

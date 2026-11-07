@@ -3,7 +3,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from step3.anxiety import anxiety_score, blink_item, gaze_item, tier
+from step3.anxiety import anxiety_score, blink_item, gaze_item, tier, worse
+
+
+def test_worse_takes_more_tense_stage():
+    assert worse(80, 60) == 60      # 2단계에서 더 긴장했으면 그 값
+    assert worse(70, None) == 70    # 2단계 목소리가 없으면 1단계 값
+    assert worse(None, None) is None
 
 
 def test_core_items_weigh_four_times_aux():
@@ -17,7 +23,7 @@ def test_missing_items_drop_out():
 
 
 def test_tier_bounds():
-    assert [tier(s) for s in (None, 20, 19.9, 10, 9.9)] == ["warmup", "warmup", "standard", "standard", "practice"]
+    assert [tier(s) for s in (None, 20, 19.9, 5, 4.9)] == ["warmup", "warmup", "standard", "standard", "practice"]
 
 
 def test_gaze_counts_only_looking_away():
