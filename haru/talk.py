@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import re
 import logging
 import os
 
@@ -188,8 +189,40 @@ def parse_profile_request(data) -> list[dict]:
     return out
 
 
-def fallback_value(answer: str) -> str:
-    """AI 없이: 대답 앞부분을 그대로 (사용자가 카드에서 고친다)."""
+NAME_LABEL = "부를 이름"
+# "지렁이라고 불러 줘" / "세연이라고 해 주세요" / "제 이름은 지우예요" / "지우요" → 이름만.
+# "○○이라고"는 이름+이(세연이)인지 이름(지렁이)인지 글자로는 못 가르므로 '라고' 앞을 통째로 쓴다 — "세연이"도 부르는 이름으로 자연스럽다.
+_NAME_PATTERNS = [
+    re.compile(r"([가-힣A-Za-z]{1,10})\s*라고\s*(?:불러|해|하면|부르)"),
+    re.compile(r"(?:제|내|저의|나의)\s*이름은\s*([가-힣A-Za-z]{1,10}?)\s*(?:이에요|예요|입니다|이야|야|이요|요|이고|고)?(?:[.!~\s]|$)"),
+]
+_NAME_ENDINGS = ("이에요", "예요", "입니다", "이요", "요")
+
+
+def extract_name(answer: str) -> str:
+    """부를 이름 대답에서 이름만 뽑는다(AI 없이). 못 뽑으면 빈 문자열."""
+    a = " ".join((answer or "").split())
+    for pat in _NAME_PATTERNS:
+        m = pat.search(a)
+        if m:
+            return m.group(1)
+    # "지우요"처럼 한 낱말 대답이면 끝맺음만 떼고 그대로
+    word = re.sub(r"[.!~?\s]+$", "", a)
+    if word and " " not in word and len(word) <= 8:
+        for end in _NAME_ENDINGS:
+            if word.endswith(end) and len(word) > len(end):
+                return word[: -len(end)]
+        return word
+    return ""
+
+
+def fallback_value(answer: str, label: str = "") -> str:
+    """AI 없이: 대답 앞부분을 그대로 (사용자가 카드에서 고친다). 부를 이름은 이름만 뽑아 본다
+    — "지렁이라고 불러 줘"가 통째로 들어가 3단계 면접관이 그 문장으로 부르던 문제."""
+    if label == NAME_LABEL:
+        name = extract_name(answer)
+        if name:
+            return name
     a = " ".join(answer.split())
     return a if len(a) <= MAX_PROFILE_VALUE_LEN else a[:MAX_PROFILE_VALUE_LEN - 1] + "…"
 
@@ -212,7 +245,7 @@ def normalize_profile(raw, items: list[dict]) -> list[str] | None:
         if not it["answer"]:
             v = ""  # 대답이 없던 항목을 AI가 채우지 못하게
         elif not v or len(v) > MAX_PROFILE_VALUE_LEN or has_banned_term(v):
-            v = fallback_value(it["answer"])
+            v = fallback_value(it["answer"], it["label"])
         out.append(v)
     return out
 
@@ -222,7 +255,7 @@ def summarize_profile(items: list[dict], client=None) -> tuple[list[dict], str]:
     def pack(values):
         return [{"label": it["label"], "value": v} for it, v in zip(items, values)]
 
-    fallback = pack([fallback_value(it["answer"]) for it in items])
+    fallback = pack([fallback_value(it["answer"], it["label"]) for it in items])
     if detect_care([it["answer"] for it in items]):
         return fallback, "care"
     client = client if client is not None else _client
