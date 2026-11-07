@@ -166,7 +166,7 @@ def test_profile_llm_and_crisis_paths():
 
 import pytest as _pytest  # noqa: E402
 
-from haru.talk import extract_name, fallback_value  # noqa: E402
+from haru.talk import extract_name  # noqa: E402
 
 
 @_pytest.mark.parametrize("answer, name", [
