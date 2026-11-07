@@ -135,3 +135,42 @@ def binary_metrics(pairs):
         "precision": round(tp / (tp + fp), 3) if (tp + fp) else None,
         "recall": round(tp / (tp + fn), 3) if (tp + fn) else None,
     }
+
+
+# ── 2026-11 판정 변경(프론트 blink.ts MAX_BLINK_DURATION · gaze.ts markClosuresAsAversion과 같은 규칙) ──
+BLINK_SCORE_THRESH = 0.5
+MIN_BLINK_SEC = 0.08
+MAX_BLINK_SEC = 0.4
+SMILE_THRESH = 0.35
+
+
+def eye_closures(rows):
+    """앱이 재는 구간 안의 눈 감김 → (깜빡임 목록, 시선 이탈로 넘길 긴 감김 목록). 각 항목은 (시작, 끝).
+
+    - 0.08~0.4초: 깜빡임(Schiffman 2001: 깜빡임 0.1~0.4초)
+    - 0.4초 초과: 깜빡임이 아님. 그동안 원래 미소 값이 0.35 미만이면 아래를 본 것으로 보고 시선 이탈(Becker & Fuchs 1988),
+      웃는 중이면(눈이 가늘어짐) 넘기지 않는다
+    - 대답(구간)이 끝날 때 감겨 있던 건 버린다(앱과 같음)
+    """
+    blinks, long_closures = [], []
+    for s, e in measured_windows(rows):
+        start, smile_max = None, 0.0
+        for r in rows:
+            if not (s <= r["t"] <= e) or r.get("blink_score") is None:
+                continue
+            score, smile = r["blink_score"], r.get("smile_raw") or 0.0
+            if start is not None or score >= BLINK_SCORE_THRESH:
+                smile_max = max(smile_max, smile)
+            if score >= BLINK_SCORE_THRESH and start is None:
+                start = r["t"]
+            elif score < BLINK_SCORE_THRESH and start is not None:
+                d = r["t"] - start
+                if d >= MIN_BLINK_SEC:
+                    if d <= MAX_BLINK_SEC:
+                        blinks.append((start, r["t"]))
+                    elif smile_max < SMILE_THRESH:
+                        long_closures.append((start, r["t"]))
+                start, smile_max = None, 0.0
+            if start is None:
+                smile_max = 0.0
+    return blinks, long_closures
