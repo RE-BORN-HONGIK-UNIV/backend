@@ -5,7 +5,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "labeling"))
 
 from live_session import (  # noqa: E402
-    answer_windows, binary_metrics, gaze_prediction, measured_windows, sample_every, smoothed_measured_rows,
+    answer_windows, binary_metrics, eye_closures, gaze_prediction, measured_windows, sample_every,
+    smoothed_measured_rows,
 )
 
 BASE = {"base_yaw": 0.0, "base_pitch": 0.0, "base_iris_x": 0.0, "base_iris_y": 0.2}
@@ -45,3 +46,37 @@ def test_sample_every_and_metrics():
     m = binary_metrics([(1, 1), (1, 0), (0, 0), (0, 1), (1, None)])
     assert (m["tp"], m["fp"], m["tn"], m["fn"], m["n"]) == (1, 1, 1, 1, 4)
     assert m["accuracy"] == 0.5
+
+
+def _closure_rows(spans, smile=0.0, end=10.0):
+    """0.05초 간격 장면 — spans 안이면 눈 감김(0.9), 밖이면 뜸(0.1). 대답은 0~end초 내내."""
+    rows, t = [], 0.0
+    while t <= end + 1e-9:
+        closed = any(a <= t < b for a, b in spans)
+        rows.append({"t": round(t, 2), "answering": True, "calibrating": False, "face": True,
+                     "blink_score": 0.9 if closed else 0.1, "smile_raw": smile})
+        t += 0.05
+    return rows
+
+
+def test_blink_up_to_0_4s_and_longer_closure_becomes_aversion():
+    rows = _closure_rows([(2.0, 2.2), (5.0, 8.3)])
+    blinks, long_closures = eye_closures(rows)
+    assert len(blinks) == 1 and abs(blinks[0][0] - 2.0) < 1e-6
+    assert len(long_closures) == 1 and abs(long_closures[0][1] - 8.3) <= 0.06  # 0.05초 간격 장면
+
+
+def test_long_closure_while_smiling_is_not_aversion():
+    rows = _closure_rows([(5.0, 5.6)], smile=0.45)
+    assert eye_closures(rows) == ([], [])
+
+
+def test_baseline_tension_from_calibration_face_step():
+    from live_session import baseline_tension, tension_delta
+    rows = [{"calibrating": True, "calib_step": 1.0, "brow_down": v} for v in (0.03, 0.04, 0.05)]
+    rows += [{"calibrating": True, "calib_step": 3.0, "brow_down": 0.5}]  # 어깨 보기 단계는 뺀다
+    rows += [{"calibrating": False, "brow_down": 0.25}]
+    assert abs(baseline_tension(rows) - 0.04) < 1e-9
+    assert abs(tension_delta(rows[-1], 0.04) - 0.21) < 1e-9
+    # 예전 기록: brow_down 칸이 없으면 tension_app(원래 값)을 쓴다
+    assert abs(baseline_tension([{"calibrating": True, "tension_app": 0.02}]) - 0.02) < 1e-9
