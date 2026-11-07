@@ -68,7 +68,7 @@ from step1.llm_feedback import generate_feedback
 from step1 import audio_prep, energy_rule
 
 # Step1 종합 점수 (Stage1Result에 저장할 값 — 프론트 overallScore와 동일 공식)
-from step1.stage1_score import overall_score as stage1_overall_score
+from step1.stage1_score import overall_score as stage1_overall_score, window_score
 
 # Step3 면접 질문 생성 (선택적 — 키 없으면 자동 폴백)
 from step3.interview_question import clean_about_me, generate_question
@@ -725,7 +725,7 @@ def analyze():
         for label in CNN_LABELS:
             p = cnn_result[label][0] if label in cnn_result else None
             cnn_probs[label]  = None if p is None else round(p * 100, 1)
-            cnn_scores[label] = None if p is None else round(100 * (1 - p), 1)
+            cnn_scores[label] = None if p is None else window_score(cnn_result[label][2], cnn_models[label][1]['threshold'])
             detected[label]   = None if p is None else p >= cnn_models[label][1]['threshold']
         # config.json의 status가 reference면 시험을 통과하지 못한 참고용 모델이다(떨림 v1)
         model_status = {label: cnn_models[label][1].get('status', 'ready') if label in cnn_models else 'pending'
