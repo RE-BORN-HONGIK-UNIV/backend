@@ -174,3 +174,33 @@ def eye_closures(rows):
             if start is None:
                 smile_max = 0.0
     return blinks, long_closures
+
+
+def baseline_tension(rows):
+    """찡그림 판정의 평소 값 — 프론트와 같게 캘리브레이션 중(두 단계면 '하루의 눈 보기' 단계만) 미간 값의 중앙값.
+    CSV에 base_tension 칸이 있으면(2026-11 이후 기록) 그 값을 쓰고, 없으면(예전 기록) 직접 계산한다."""
+    for r in reversed(rows):
+        if r.get("base_tension") is not None and r["base_tension"] > 0:
+            return r["base_tension"]
+    vals = []
+    for r in rows:
+        if not r.get("calibrating"):
+            continue
+        if r.get("calib_step") not in (None, 1.0):  # 두 단계면 눈 보기(1)만
+            continue
+        v = r.get("brow_down") if r.get("brow_down") is not None else r.get("tension_app")
+        if v is not None:
+            vals.append(v)
+    if not vals:
+        return 0.0
+    vals.sort()
+    m = len(vals) // 2
+    return vals[m] if len(vals) % 2 else (vals[m - 1] + vals[m]) / 2
+
+
+def tension_delta(row, base):
+    """평소 대비 미간 값(프론트 tensionApp과 같음). 예전 기록은 tension_app이 원래 값이라 base를 뺀다."""
+    raw = row.get("brow_down")
+    if raw is None:
+        raw = row.get("tension_app")
+    return None if raw is None else raw - base

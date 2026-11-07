@@ -69,3 +69,14 @@ def test_blink_up_to_0_4s_and_longer_closure_becomes_aversion():
 def test_long_closure_while_smiling_is_not_aversion():
     rows = _closure_rows([(5.0, 5.6)], smile=0.45)
     assert eye_closures(rows) == ([], [])
+
+
+def test_baseline_tension_from_calibration_face_step():
+    from live_session import baseline_tension, tension_delta
+    rows = [{"calibrating": True, "calib_step": 1.0, "brow_down": v} for v in (0.03, 0.04, 0.05)]
+    rows += [{"calibrating": True, "calib_step": 3.0, "brow_down": 0.5}]  # 어깨 보기 단계는 뺀다
+    rows += [{"calibrating": False, "brow_down": 0.25}]
+    assert abs(baseline_tension(rows) - 0.04) < 1e-9
+    assert abs(tension_delta(rows[-1], 0.04) - 0.21) < 1e-9
+    # 예전 기록: brow_down 칸이 없으면 tension_app(원래 값)을 쓴다
+    assert abs(baseline_tension([{"calibrating": True, "tension_app": 0.02}]) - 0.02) < 1e-9

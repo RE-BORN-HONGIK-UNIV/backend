@@ -15,7 +15,7 @@ import sys
 import cv2
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from live_session import gaze_prediction, read_debug_csv, sample_every, smoothed_measured_rows  # noqa: E402
+from live_session import baseline_tension, tension_delta, gaze_prediction, read_debug_csv, sample_every, smoothed_measured_rows  # noqa: E402
 
 LABEL_COLUMNS = ["label_gaze", "label_smile", "label_tension", "label_blink"]
 
@@ -32,6 +32,7 @@ def main(video_path, csv_path, out_dir, use_all=False):
         return
     os.makedirs(out_dir, exist_ok=True)
     session = os.path.splitext(os.path.basename(csv_path))[0]
+    base_t = baseline_tension(rows)
 
     # 브라우저 녹화(webm)는 길이 정보가 없어 원하는 시각으로 바로 이동이 안 되는 경우가 많아, 처음부터 읽으며 고른다
     cap = cv2.VideoCapture(video_path)
@@ -55,6 +56,9 @@ def main(video_path, csv_path, out_dir, use_all=False):
                 **{k: ("" if r.get(k) is None else round(r[k], 4)) for k in (
                     "s_yaw", "s_pitch", "s_iris_x", "s_iris_y", "base_yaw", "base_pitch", "base_iris_x", "base_iris_y",
                     "smile_app", "smile_raw", "jaw_open", "tension_app", "blink_score")},
+                # 찡그림 — 평소(캘리브레이션) 대비 미간 값(2026-11 판정 구조)
+                "base_tension": round(base_t, 4),
+                "tension_delta": "" if tension_delta(r, base_t) is None else round(tension_delta(r, base_t), 4),
                 **{k: "" for k in LABEL_COLUMNS},
             })
             i += 1

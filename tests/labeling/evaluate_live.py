@@ -93,6 +93,20 @@ def main(paths):
     print("■ 긴장 (label_tension: 굳은·찌푸린 표정이면 1)")
     show(f"지금 앱 (≥{TENSION_THRESHOLD})", binary_metrics([(1 if (r["tension_app"] or 0) >= TENSION_THRESHOLD else 0, r["label_tension"]) for r in rows if r["tension_app"] is not None]))
     sweep(rows, "tension_app", "label_tension", TENSION_THRESHOLD)
+    if any(r.get("tension_delta") is not None for r in rows):
+        # 2026-11 판정 구조: 평소(캘리브레이션) 대비 — 사람마다 무표정 값을 뺀다. 0.02 간격으로 더 촘촘히 본다
+        print("  · 평소 대비(tension_delta) 기준 탐색 — 여러 사람의 찡그림이 고르게 섞였는지 먼저 확인할 것")
+        best = None
+        t = 0.02
+        while t <= 0.5 + 1e-9:
+            m = binary_metrics([(1 if r["tension_delta"] >= t else 0, r["label_tension"]) for r in rows if r.get("tension_delta") is not None])
+            if m["accuracy"] is not None:
+                show(f"    평소 대비 ≥{round(t, 2)}", m)
+                if best is None or m["accuracy"] > best[1]["accuracy"]:
+                    best = (round(t, 2), m)
+            t += 0.02
+        if best:
+            show(f"  가장 정확한 평소 대비 기준 {best[0]}", best[1])
     print()
 
     print("■ 깜빡임 (label_blink: 눈을 감는 중이면 1 — 사진 한 장 기준이라 참고용)")
