@@ -40,3 +40,46 @@ def test_transcriptions_never_overlap():
 def test_passes_arguments_and_result_through():
     assert transcribe(FakeModel(), "x", language="ko", word_timestamps=True) == {
         "text": "x", "kwargs": {"language": "ko", "word_timestamps": True}}
+
+
+class _Hooked:
+    def __init__(self):
+        self._forward_hooks = {}
+
+
+class _Block:
+    def __init__(self):
+        self.cross_attn = _Hooked()
+
+
+class PoisonedModel:
+    """단어 시각 계산이 한 번 실패해 cross_attn에 hook이 남은 모델 — hook이 남아 있으면 전사가 실패한다."""
+
+    def __init__(self, fail_once=False):
+        self.decoder = type("D", (), {})()
+        self.decoder.blocks = [_Block(), _Block()]
+        self.fail_once = fail_once
+
+    def transcribe(self, audio, **kwargs):
+        if any(b.cross_attn._forward_hooks for b in self.decoder.blocks):
+            raise TypeError("'NoneType' object is not subscriptable")
+        if self.fail_once:
+            self.fail_once = False
+            self.decoder.blocks[0].cross_attn._forward_hooks[1] = object()  # 실패하며 hook을 남김
+            raise TypeError("alignment failed")
+        return {"text": audio}
+
+
+def test_leftover_hooks_from_a_failed_alignment_do_not_break_the_next_request():
+    model = PoisonedModel()
+    model.decoder.blocks[1].cross_attn._forward_hooks[7] = object()  # 이전 실패로 남은 hook
+    assert transcribe(model, "ok") == {"text": "ok"}
+
+
+def test_a_failure_does_not_poison_later_requests():
+    model = PoisonedModel(fail_once=True)
+    try:
+        transcribe(model, "first")
+    except TypeError:
+        pass
+    assert transcribe(model, "second") == {"text": "second"}
