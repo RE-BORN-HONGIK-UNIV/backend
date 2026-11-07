@@ -150,7 +150,7 @@ def test_profile_values_cannot_invent_content_for_empty_answers():
 def test_profile_wrong_count_is_rejected_and_bad_item_uses_answer():
     items = parse_profile_request({"items": ITEMS})
     assert normalize_profile({"values": ["지우"]}, items) is None
-    assert normalize_profile({"values": ["진단상 불안 증상", ""]}, items)[0] == "지우라고 불러 주세요"
+    assert normalize_profile({"values": ["진단상 불안 증상", ""]}, items)[0] == "지우"  # 부를 이름은 대답에서 이름만 뽑아 씀
 
 
 def test_profile_llm_and_crisis_paths():
@@ -162,3 +162,30 @@ def test_profile_llm_and_crisis_paths():
     crisis = parse_profile_request({"items": [{"label": "걱정", "question": "q", "answer": "자해하고 싶어요"}]})
     _, source = summarize_profile(crisis, client=client)
     assert source == "care" and client.calls == []
+
+
+import pytest as _pytest  # noqa: E402
+
+from haru.talk import extract_name  # noqa: E402
+
+
+@_pytest.mark.parametrize("answer, name", [
+    ("지렁이라고 불러 줘", "지렁이"),
+    ("음... 세연이라고 불러주세요", "세연이"),
+    ("지우라고 해 주세요", "지우"),
+    ("제 이름은 지우예요", "지우"),
+    ("제 이름은 박세연입니다.", "박세연"),
+    ("지우요", "지우"),
+    ("세연", "세연"),
+])
+def test_name_is_extracted_without_ai(answer, name):
+    assert extract_name(answer) == name
+
+
+def test_name_extraction_gives_up_on_long_unclear_answers():
+    assert extract_name("음 글쎄요 잘 모르겠는데 그냥 아무렇게나 불러 주셔도 돼요") == ""
+
+
+def test_fallback_uses_extracted_name_only_for_the_name_item():
+    assert fallback_value("지렁이라고 불러 줘", "부를 이름") == "지렁이"
+    assert fallback_value("친구들 만나고 공부해", "요즘 지내는 이야기") == "친구들 만나고 공부해"
