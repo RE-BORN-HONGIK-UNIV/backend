@@ -30,6 +30,8 @@ CNN(prolongation/tremor/energy)은 이미 전체 오디오를 슬라이딩 윈�
 import re
 import librosa
 
+from step1.whisper_guard import transcribe as _guarded_transcribe
+
 
 # -----------------------------------------------------------------------------
 # 설정값 (잠정치 - 근거는 /docs/filler_threshold_근거.md 참고)
@@ -67,7 +69,9 @@ VERBATIM_PROMPT = (
 
 def get_word_segments(audio_path_or_array, whisper_model):
     """Whisper 전사 결과에서 단어별 text/start/end를 반환한다."""
-    result = whisper_model.transcribe(
+    # 동시에 다른 요청이 Whisper를 쓰면 단어 시각 계산이 깨져서 잠금으로 줄 세운다(step1/whisper_guard.py)
+    result = _guarded_transcribe(
+        whisper_model,
         audio_path_or_array,
         language="ko",
         word_timestamps=True,

@@ -1531,7 +1531,9 @@ def interview_transcribe():
             converted_path = analysis_path
 
         y16, _ = librosa.load(analysis_path, sr=16000, mono=True)
-        result = whisper_model.transcribe(y16, language="ko")
+        # Whisper는 한 번에 한 요청만(단어 시각을 재는 다른 요청과 겹치면 그쪽이 깨짐 — step1/whisper_guard.py)
+        from step1.whisper_guard import transcribe as guarded_transcribe
+        result = guarded_transcribe(whisper_model, y16, language="ko")
         text = result.get("text", "").strip()
 
         return jsonify({'text': text, 'available': True})
