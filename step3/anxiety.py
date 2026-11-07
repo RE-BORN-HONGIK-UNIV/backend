@@ -46,8 +46,9 @@ def anxiety_score(items: dict) -> float | None:
 
 
 def tier(score: float | None) -> str:
-    """불안도 20 이상 편안(warmup) / 10~20 보통(standard) / 10 미만 도전(practice). 값이 없으면 가장 쉬운 난이도.
-    습관 하나가 잡히면 약 7점, 시선을 자주 피하면 약 15점 오른다. 판넬의 60·30은 이 계산식에서 거의 닿지 않아 낮췄다."""
+    """불안도 20 이상 편안(warmup) / 5~20 보통(standard) / 5 미만 도전(practice). 값이 없으면 가장 쉬운 난이도.
+    지인 긴 대화 시뮬레이션에서 시선을 자주 피하면 22 이상, 바라보며 습관이 섞이면 중앙값 10, 평소 말은 0 근처였다
+    (docs/anxiety_근거.md). 초기값이라 사용자 테스트로 다시 맞춘다."""
     if score is None or score >= 20:
         return "warmup"
-    return "standard" if score >= 10 else "practice"
+    return "standard" if score >= 5 else "practice"
