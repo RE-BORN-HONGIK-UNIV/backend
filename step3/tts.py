@@ -28,10 +28,12 @@ except ImportError:  # typecast-python 미설치 환경에서도 서버는 떠�
 MODEL = os.environ.get("TYPECAST_MODEL", "ssfm-v30")
 
 # 프론트 difficulty.ts의 DifficultyTier와 같은 키 사용 (warmup / standard / practice)
+# 3단계 면접관은 난이도와 상관없이 한 목소리(경량 웹과 같은 "형진") — 미리 받아 둔 면접관 mp3와 같은 목소리
+INTERVIEWER_VOICE = "tc_682e8798603b4e9ed84074f5"
 VOICE_IDS = {
-    "warmup": os.environ.get("TYPECAST_VOICE_WARMUP"),
-    "standard": os.environ.get("TYPECAST_VOICE_STANDARD"),
-    "practice": os.environ.get("TYPECAST_VOICE_PRACTICE"),
+    "warmup": os.environ.get("TYPECAST_VOICE_WARMUP") or INTERVIEWER_VOICE,
+    "standard": os.environ.get("TYPECAST_VOICE_STANDARD") or INTERVIEWER_VOICE,
+    "practice": os.environ.get("TYPECAST_VOICE_PRACTICE") or INTERVIEWER_VOICE,
     # 1·2단계 대화 상대 하루(경량 웹과 같은 "서현" 목소리). 목소리 ID는 비밀이 아니라 기본값으로 둔다.
     "haru": os.environ.get("TYPECAST_VOICE_HARU") or "tc_69f2e455ea79fd197aa0476f",
 }

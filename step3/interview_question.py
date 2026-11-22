@@ -78,29 +78,55 @@ FOLLOW_UP_INSTRUCTIONS = {
     ),
 }
 
-# API 실패 시 안전망. 기본 질문은 프론트 difficulty.ts의 QUESTION_BANK와 동일
+# API 실패 시 안전망. 문장은 미리 받아 둔 면접관 mp3와 글자까지 같아야 그 목소리로 나온다
+# (목록: voice-cnn/.scratch/stage3-redesign/lines.md A3·A4, 프론트 prerecorded.ts). 첫 질문(자기소개)은 프론트가 따로 낸다.
 FALLBACK_QUESTIONS = {
     "warmup": [
-        "간단하게 자기소개 먼저 해주시겠어요?",
-        "요즘 관심 있게 보고 있는 게 있다면 편하게 말씀해주세요.",
+        "요즘 관심 있게 보고 있는 게 있다면 편하게 말씀해 주세요.",
         "오늘 이 자리에 오면서 어떤 마음이었는지 궁금해요.",
+        "쉬는 날에는 주로 어떻게 시간을 보내세요?",
+        "최근에 작게라도 해낸 일이 있다면 들려주시겠어요?",
+        "스스로 생각하기에 본인은 어떤 사람인가요?",
+        "일을 한다면 어떤 분위기의 곳에서 일하고 싶으세요?",
     ],
     "standard": [
-        "이 직무에 지원하게 된 계기를 말씀해주시겠어요?",
-        "최근에 어려운 상황을 해결했던 경험이 있다면 소개해주세요.",
+        "하고 싶은 일에 관심을 갖게 된 계기를 말씀해 주시겠어요?",
+        "최근에 어려운 상황을 해결했던 경험이 있다면 소개해 주세요.",
         "본인의 강점을 하나 꼽는다면 무엇인가요?",
+        "다른 사람과 함께 무언가를 해 본 경험이 있다면 말씀해 주세요.",
+        "일할 때 가장 중요하다고 생각하는 것은 무엇인가요?",
+        "앞으로 어떤 모습으로 일하고 싶으신가요?",
     ],
     "practice": [
-        "이 직무에 본인이 적합하다고 생각하는 구체적인 근거는 무엇인가요?",
-        "실패했던 경험과 그로부터 배운 점을 말씀해주세요.",
-        "지금 말씀하신 강점을 실제로 발휘했던 순간을 좀 더 구체적으로 설명해주시겠어요?",
+        "하고 싶은 일에 본인이 잘 맞는다고 생각하는 구체적인 근거는 무엇인가요?",
+        "실패했던 경험과 그로부터 배운 점을 말씀해 주세요.",
+        "의견이 다른 사람과 일을 맞춰 가야 했던 경험이 있나요?",
+        "본인의 약점은 무엇이고, 어떻게 보완하고 있나요?",
+        "해야 할 일이 한꺼번에 몰리면 어떻게 순서를 정하시나요?",
+        "일을 시작한다면 처음 석 달 동안 무엇을 해 보고 싶으신가요?",
     ],
 }
 
+# 어떤 대답 뒤에도 어울리는 꼬리질문. 한 면접 안에서 겹치지 않게 순서대로 돌려 쓴다(도전은 1→2처럼 이어져도 자연스럽게)
 FALLBACK_FOLLOW_UPS = {
-    "warmup": ["방금 이야기 좋았어요. 그 부분을 조금만 더 들려주실 수 있을까요?"],
-    "standard": ["방금 말씀하신 내용을 실제 예시와 함께 조금 더 설명해주실 수 있을까요?"],
-    "practice": ["방금 말씀하신 내용에서, 그렇게 판단한 구체적인 근거를 말씀해주시겠어요?"],
+    "warmup": [
+        "방금 이야기 좋았어요. 그 부분을 조금만 더 들려주실 수 있을까요?",
+        "그때 어떤 기분이 들었는지 궁금해요.",
+        "그 이야기에서 가장 기억에 남는 게 있다면 말씀해 주세요.",
+        "천천히 하셔도 돼요. 예를 하나만 들어 주시겠어요?",
+    ],
+    "standard": [
+        "방금 말씀하신 내용을 실제 예시와 함께 조금 더 설명해 주실 수 있을까요?",
+        "그때 본인은 구체적으로 어떤 역할을 하셨나요?",
+        "그렇게 생각하게 된 이유를 조금 더 말씀해 주시겠어요?",
+        "그 경험이 지금의 본인에게 어떤 도움이 됐나요?",
+    ],
+    "practice": [
+        "방금 말씀하신 내용에서, 그렇게 판단한 구체적인 근거를 말씀해 주시겠어요?",
+        "다시 그 상황이 온다면 무엇을 다르게 하시겠어요?",
+        "그 결과를 스스로는 어떻게 평가하시나요?",
+        "그 경험을 앞으로 일할 때 어떻게 살릴 수 있을까요?",
+    ],
 }
 
 
@@ -258,7 +284,9 @@ def _fallback_question(
     tier: str, previous_questions: list[str], mode: str, past_questions: list[str] | None = None
 ) -> str:
     if mode == "follow_up":
-        return random.choice(FALLBACK_FOLLOW_UPS.get(tier, FALLBACK_FOLLOW_UPS["standard"]))
+        pool = FALLBACK_FOLLOW_UPS.get(tier, FALLBACK_FOLLOW_UPS["standard"])
+        unused = [q for q in pool if q not in previous_questions]
+        return (unused or pool)[0]
 
     pool = FALLBACK_QUESTIONS.get(tier, FALLBACK_QUESTIONS["standard"])
     remaining = [q for q in pool if q not in previous_questions]
@@ -267,7 +295,7 @@ def _fallback_question(
         remaining = [q for q in remaining if "자기소개" not in q]
     if not remaining:
         remaining = pool
-    # 지난 면접에서 나온 적 없는 질문을 우선한다. 다 나왔던 거라면(고정 질문은 난이도당 3개뿐) 그냥 고른다.
+    # 지난 면접에서 나온 적 없는 질문을 우선한다. 다 나왔던 거라면(고정 질문은 난이도당 6개뿐) 그냥 고른다.
     fresh = [q for q in remaining if q not in (past_questions or [])]
     return random.choice(fresh or remaining)
 

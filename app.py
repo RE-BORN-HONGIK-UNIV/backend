@@ -79,6 +79,7 @@ from step3.anxiety import blink_item as anxiety_blink_item, gaze_item as anxiety
 
 # 면접 직후 코치 노트 에이전트 (이력 조회 도구 + 검증 + 대체 노트)
 from coach.agent import MODEL as COACH_MODEL, generate_note as generate_coach_note
+from coach.report import generate_report_coach, parse_report_request
 from coach.practice import RateLimiter, generate_hint, parse_hint_request
 from haru.talk import generate_reply, parse_profile_request, parse_reply_request, summarize_profile
 
@@ -216,6 +217,8 @@ class InterviewSession(db.Model):
     )
     # 면접 직후 코치 노트(1:1). 노트에는 사용자의 답변에서 인용한 문장이 들어가므로 세션과 함께 삭제된다.
     coach_note = db.relationship('CoachNote', backref='session', uselist=False, cascade='all, delete-orphan')
+    # 리포트 3·4번 칸 AI 결과(1:1). 다듬은 대답이 들어 있어 세션과 함께 삭제된다.
+    report_coach = db.relationship('ReportCoach', backref='session', uselist=False, cascade='all, delete-orphan')
 
     def to_summary(self):
         return {
@@ -262,6 +265,17 @@ class CoachNote(db.Model):
     content = db.Column(db.Text, nullable=False)       # 노트 JSON (coach/schema.py 형태)
     source = db.Column(db.String(20), nullable=False)  # llm / fallback / care
     model = db.Column(db.String(60), nullable=True)    # source가 llm일 때만
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+
+class ReportCoach(db.Model):
+    """리포트 3·4번 칸 — 다듬은 대답과 다음 연습 계획(coach/report.py가 만들고 검사한 JSON).
+    면접 1회당 1개라서 리포트를 다시 열어도 AI를 다시 부르지 않는다."""
+    id = db.Column(db.Integer, primary_key=True)
+    session_id = db.Column(db.Integer, db.ForeignKey('interview_session.id'), nullable=False, unique=True)
+    content = db.Column(db.Text, nullable=False)       # 결과 JSON
+    source = db.Column(db.String(20), nullable=False)  # llm / fallback / care
+    model = db.Column(db.String(60), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow, nullable=False)
 
 
@@ -1440,6 +1454,43 @@ def get_or_create_coach_note(session_id):
             raise
         return jsonify({'note': json.loads(row.content), 'source': row.source})
     return jsonify({'note': note, 'source': source})
+
+
+@app.route('/interview/sessions/<int:session_id>/report-coach', methods=['POST'])
+def get_or_create_report_coach(session_id):
+    """리포트 3·4번 칸 AI. 이미 만든 게 있으면 그대로 돌려주고, 없으면 만들어 저장한다.
+    body: { "turns": [{"question", "fillers", "pauses"}], "candidates": [{"key", "line"}] }
+    응답: { "result": {picked, rewrites, plan, care}, "source": "llm" | "fallback" | "care" }"""
+    user = get_current_user()
+    if user is None:
+        return jsonify({'error': '로그인이 필요합니다'}), 401
+    session = _own_interview_session(user, session_id)
+    if session is None:
+        return jsonify({'error': '면접 기록을 찾을 수 없습니다'}), 404
+
+    existing = session.report_coach
+    if existing is not None:
+        return jsonify({'result': json.loads(existing.content), 'source': existing.source})
+    try:
+        stats, cands = parse_report_request(request.get_json(silent=True))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    turns = [{'question': t.question, 'answer': t.answer or ''} for t in session.turns]
+    result, source = generate_report_coach(turns, stats, cands)
+    row = ReportCoach(session_id=session.id, content=json.dumps(result, ensure_ascii=False),
+                      source=source, model=COACH_MODEL if source == 'llm' else None)
+    try:
+        db.session.add(row)
+        db.session.commit()
+    except IntegrityError:
+        # 리포트가 동시에 두 번 열려 먼저 저장된 게 있으면 그걸 쓴다
+        db.session.rollback()
+        row = ReportCoach.query.filter_by(session_id=session.id).first()
+        if row is None:
+            raise
+        return jsonify({'result': json.loads(row.content), 'source': row.source})
+    return jsonify({'result': result, 'source': source})
 
 
 # 연습 힌트 요청 제한 — 요청마다 AI 비용이 들어서 사용자당 시간당 횟수를 막는다 (coach/practice.py 참고)
