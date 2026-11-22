@@ -238,3 +238,12 @@ def test_about_section_only_for_main_questions():
 def test_user_prompt_includes_about_me_section():
     p = _user_prompt("standard", [], None, "main", about_me=["해 본 일: 편의점 아르바이트"])
     assert "편의점 아르바이트" in p
+
+
+def test_fallback_follow_ups_do_not_repeat_within_an_interview():
+    pool = FALLBACK_FOLLOW_UPS["practice"]
+    asked = []
+    for _ in range(len(pool)):
+        asked.append(_fallback_question("practice", previous_questions=asked, mode="follow_up"))
+    assert asked == pool  # 순서대로 겹치지 않게
+    assert _fallback_question("practice", previous_questions=asked, mode="follow_up") == pool[0]  # 다 쓰면 처음부터
