@@ -5,6 +5,23 @@
 blendshape 규칙 판정) → **3단계** 실전 면접(AI 질문 생성 + TTS + STT) → 코치 노트·리포트.
 1·2단계에서는 대화 상대 "하루"가 사용자의 대답에 반응하며 이야기를 이어 간다.
 
+## 전체 흐름
+
+```
+브라우저 (React · Netlify)
+  │  녹음·영상 업로드, 2단계 실시간 통화는 브라우저 MediaPipe가 계산한 숫자만 전송
+  ▼
+Flask 백엔드 (이 저장소 · Render)
+  ├─ 1단계 목소리 분석: librosa 규칙 + CNN + Whisper
+  ├─ 2단계 표정·시선 분석: MediaPipe
+  ├─ 3단계 질문·코치 노트·하루 대화 → Anthropic API
+  ├─ 면접관·하루 목소리 → Typecast TTS
+  └─ 점수·면접 기록 → PostgreSQL
+```
+
+1·2단계 점수가 쌓이면 3단계 면접의 난이도와 질문 방식이 정해지고, 면접이 끝나면 대답 기록으로 코치 노트와 리포트를 만든다.
+영상·음성 파일은 분석 뒤 바로 지우고, 서버에는 점수와 대답 글만 남긴다.
+
 ## 스택
 
 | 영역 | 기술 |
@@ -51,19 +68,76 @@ render.yaml     Render Blueprint — 웹 서비스 + Postgres DB
 
 ## API
 
-로그인이 필요한 API는 `Authorization: Bearer <token>` 헤더를 쓴다. 게스트 토큰도 똑같이 쓰인다.
+로그인 칸: **필요** = `Authorization: Bearer <token>` 필수(게스트 토큰 포함), **선택** = 있으면 기록을 저장하거나 맞춤으로 동작, **—** = 필요 없음.
+AI를 쓰는 API는 키가 없거나 호출이 실패해도 정해 둔 문장으로 답한다.
 
-- **인증** — `POST /api/signup`, `POST /api/login`(7일 토큰), `POST /api/guest`(로그인 없이 시작 — 게스트 계정과 30일 토큰, IP당 시간당 20개), `PUT /api/me/nickname`(불러 줄 이름, 20자까지)
-- **1단계(목소리)** — `POST /api/stage1/calibrate`(마이크 확인 녹음으로 개인 기준값), `POST /analyze`(녹음 → 목소리 5개 점수·리포트 세부 값, `stage` 1·2일 때 저장), `POST /analyze/feedback`(코칭 한 문단, AI 실패 시 템플릿), `GET /analyze/stage1/latest`
-- **2단계(표정·시선)** — `POST /analyze/gaze-blink`(업로드 영상 → 깜빡임·시선·표정 + 하이라이트 클립), `POST /analyze/gaze-blink/live`(실시간 통화 결과 숫자만 저장), `GET /analyze/stage2/latest`
-- **하루 대화** — `POST /haru/reply`(대답에 한 문장 반응 + 다음 질문), `POST /haru/profile`("하루가 이렇게 이해했어요" 카드, 저장 안 함). 사용자당 시간당 120회
-- **3단계(면접)** — `GET /interview/anxiety`(1·2단계 최신 결과 → 난이도), `POST /interview/next-question`(기본·꼬리질문, AI 실패 시 고정 질문), `POST /interview/tts`(문장 → 면접관·하루 목소리 mp3), `POST /interview/transcribe`(대답 영상 STT)
-- **면접 기록(본인만)** — `POST/GET /interview/sessions`, `GET/DELETE /interview/sessions/<id>`, `POST /interview/sessions/<id>/turns`, `PUT /interview/sessions/<id>/turns/<turn_id>/answer`, `POST /interview/sessions/<id>/complete`
-- **코치** — `POST /interview/sessions/<id>/coach-note`(면접 직후 코치 노트), `POST /interview/sessions/<id>/report-coach`(리포트 다듬은 대답·다음 연습 계획) — 둘 다 면접당 한 번 만들어 저장. `POST /interview/practice-hint`(맞춤 연습 힌트, 사용자당 시간당 20회)
-- **커뮤니티("이야기")** — `GET/POST /community/posts`, `GET/DELETE /community/posts/<id>`, `POST /community/posts/<id>/comments`
-- **기타** — `GET /health`
+### 인증
 
-AI 키가 없거나 호출이 실패해도 AI를 쓰는 API는 정해 둔 문장으로 답한다. 키 없이도 전체 흐름이 끝까지 돈다.
+| 메서드 | 주소 | 하는 일 | 로그인 |
+|---|---|---|---|
+| POST | `/api/signup` | 회원가입 | — |
+| POST | `/api/login` | 로그인, 7일 토큰 발급 | — |
+| POST | `/api/guest` | 게스트 계정과 30일 토큰 발급 (IP당 시간당 20개) | — |
+| PUT | `/api/me/nickname` | 불러 줄 이름 저장 (20자까지) | 필요 |
+
+### 1단계 · 목소리
+
+| 메서드 | 주소 | 하는 일 | 로그인 |
+|---|---|---|---|
+| POST | `/api/stage1/calibrate` | 마이크 확인 녹음으로 개인 기준값 측정 | — |
+| POST | `/analyze` | 녹음 → 목소리 5개 점수·리포트 세부 값 (`stage` 1·2면 저장) | 선택 |
+| POST | `/analyze/feedback` | 분석 결과로 코칭 한 문단 생성 | — |
+| GET | `/analyze/stage1/latest` | 최근 1단계 결과 | 필요 |
+
+### 2단계 · 표정·시선
+
+| 메서드 | 주소 | 하는 일 | 로그인 |
+|---|---|---|---|
+| POST | `/analyze/gaze-blink` | 업로드 영상 → 깜빡임·시선·표정 점수 + 하이라이트 클립 | 필요 |
+| POST | `/analyze/gaze-blink/live` | 실시간 통화 결과(숫자) 저장 | 필요 |
+| GET | `/analyze/stage2/latest` | 최근 2단계 결과 | 필요 |
+
+### 하루 대화
+
+| 메서드 | 주소 | 하는 일 | 로그인 |
+|---|---|---|---|
+| POST | `/haru/reply` | 대답에 한 문장 반응 + 다음 질문 (시간당 120회) | 필요 |
+| POST | `/haru/profile` | "하루가 이렇게 이해했어요" 카드 정리 (저장 안 함) | 필요 |
+
+### 3단계 · 면접
+
+| 메서드 | 주소 | 하는 일 | 로그인 |
+|---|---|---|---|
+| GET | `/interview/anxiety` | 1·2단계 결과 → 면접 난이도 | 필요 |
+| POST | `/interview/next-question` | 기본·꼬리질문 생성 | 선택 |
+| POST | `/interview/tts` | 문장 → 면접관·하루 목소리 mp3 | — |
+| POST | `/interview/transcribe` | 대답 영상 → 글 (Whisper) | — |
+| POST | `/interview/sessions` | 면접 시작 | 필요 |
+| GET | `/interview/sessions` | 내 면접 목록 (최근 20개) | 필요 |
+| GET | `/interview/sessions/<id>` | 면접 하나의 질문·대답 | 필요 |
+| DELETE | `/interview/sessions/<id>` | 면접 기록 삭제 | 필요 |
+| POST | `/interview/sessions/<id>/turns` | 질문 저장 | 필요 |
+| PUT | `/interview/sessions/<id>/turns/<turn_id>/answer` | 대답 저장 | 필요 |
+| POST | `/interview/sessions/<id>/complete` | 면접 완료 기록 | 필요 |
+
+### 코치
+
+| 메서드 | 주소 | 하는 일 | 로그인 |
+|---|---|---|---|
+| POST | `/interview/sessions/<id>/coach-note` | 면접 직후 코치 노트 (면접당 한 번 생성·저장) | 필요 |
+| POST | `/interview/sessions/<id>/report-coach` | 리포트의 다듬은 대답·다음 연습 계획 (면접당 한 번) | 필요 |
+| POST | `/interview/practice-hint` | 맞춤 연습 힌트 (시간당 20회) | 필요 |
+
+### 커뮤니티 · 기타
+
+| 메서드 | 주소 | 하는 일 | 로그인 |
+|---|---|---|---|
+| GET | `/community/posts` | 글 목록 | — |
+| POST | `/community/posts` | 글쓰기 | 필요 |
+| GET | `/community/posts/<id>` | 글과 댓글 | — |
+| DELETE | `/community/posts/<id>` | 글 삭제 (본인 글만) | 필요 |
+| POST | `/community/posts/<id>/comments` | 댓글 쓰기 | 필요 |
+| GET | `/health` | 서버·모델 상태 | — |
 
 ## 환경변수 (`.env`, `.env.example` 참고)
 
@@ -88,6 +162,12 @@ pytest -q
 3. **정확도 검증 도구** (수동, CI 밖) — `tests/labeling/`으로 영상·녹음에서 후보를 뽑아 사람이 라벨링하고 precision·recall을 계산한다. 결과와 근거는 `step2/ACCURACY_NOTES.md`, `docs/*_근거.md`에 적는다.
 
 push·PR마다 GitHub Actions(`.github/workflows/ci.yml`)가 문법 검사, ruff(`F` 규칙), 가벼운 유닛 테스트 목록을 돌린다.
+
+## 배포
+
+- `main`에 합치면 Render가 `render.yaml` 설정대로 자동으로 다시 배포한다(Standard 플랜, gunicorn workers 1·threads 2, timeout 300초).
+- Whisper 모델은 빌드 때 미리 받아 두고, `PRELOAD_MODELS=1`로 서버가 켜지자마자 모델을 불러 둔다.
+- `DATABASE_URL`(External Database URL)과 API 키는 Render 대시보드 Environment에서 직접 넣는다. 파일에는 값을 적지 않는다.
 
 ## 트러블슈팅 기록
 
