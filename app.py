@@ -25,12 +25,6 @@ from sqlalchemy.exc import IntegrityError
 from step3.tts import synthesize_speech
 from db_url import normalize_database_url
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv(encoding='utf-8')
-except ImportError:
-    pass
-
 # 2단계 중 numpy만 쓰는 모듈은 여기서, mediapipe·cv2가 필요한 모듈은 analyze_gaze_blink() 안에서 불러온다
 from step2.blink_analyzer import (
     compute_ear_series, detect_blinks,
