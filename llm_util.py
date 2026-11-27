@@ -1,11 +1,5 @@
-"""
-LLM 호출 공통 헬퍼 (순수 함수).
-
-effort(생각·토큰 사용량) 설정을 SDK 버전과 무관하게 넘기기 위한 것. `messages.create(output_config=...)`처럼
-키워드 인자로 직접 넘기면, requirements.txt가 고정한 anthropic==0.69.0에는 그 인자가 없어서 요청을 보내기도
-전에 TypeError가 난다 — 그리고 호출부가 `except Exception`으로 폴백하는 구조라 **에러가 삼켜져서 AI가
-한 번도 안 쓰이는데 아무도 모르는** 상태가 된다(질문 생성·1단계 코칭이 그랬다).
-`extra_body`는 모든 SDK 버전에서 요청 본문에 그대로 합쳐지므로 안전하다.
+"""공통 · AI 호출 도우미 — effort(생각·토큰 사용량) 설정을 SDK 버전과 무관하게 extra_body로 넘긴다.
+키워드 인자로 넘기면 고정된 anthropic 0.69.0에서 오류가 나고 폴백에 삼켜져 AI가 한 번도 안 쓰인 적이 있다(docs/공통_설계노트.md).
 """
 from __future__ import annotations
 

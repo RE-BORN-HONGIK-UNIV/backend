@@ -1,18 +1,5 @@
-"""
-코치 노트의 모양·검증·대체 노트 (순수 함수, DB·LLM 없음).
-
-설계 원칙: **실행 가능한 조언(다음 한 걸음 카드, 일상 미션)은 코드가 정하고, LLM은 따뜻한 말(인사·"해낸 것"·
-인용)만 쓴다.** LLM이 만든 문구는 전부 검증을 거치고(길이, 평가·진단 표현, 인용이 실제 답변에 있는지),
-통과 못 하면 대체 문구로 바꾼다 — 노트는 항상 완성된 채로 나온다.
-
-facts 형태 (app.py가 DB에서 모아 넘김):
-{
-  "session":  {"id": int, "tier": str, "completed": bool,
-               "turns": [{"kind": "main"|"follow_up", "question": str, "answer": str}]},
-  "previous_sessions": [{"id": int, "tier": str, "completed": bool, "question_count": int,
-                         "answered_count": int}],          # 최근 순, 이번 면접 제외
-  "stage_scores": {"stage1": {축: 0~100} | None, "stage2": {축: 0~100} | None},
-}
+"""코치 · 노트 모양과 검증 — 실행할 조언(다음 한 걸음, 미션)은 코드가 정하고 AI는 따뜻한 말만 쓰며, AI 문구는 전부 검증해 실패하면 대체한다.
+facts(app.py가 DB에서 모아 넘기는 값)의 모양: docs/coach_설계노트.md
 """
 from __future__ import annotations
 
@@ -36,10 +23,12 @@ WEAK_BELOW = 70
 
 
 def _norm_ws(s: str) -> str:
+    """연속된 공백을 한 칸으로 줄인다."""
     return re.sub(r"\s+", " ", s).strip()
 
 
 def answered_count(turns: list[dict]) -> int:
+    """대답을 남긴 질문 수를 센다."""
     return sum(1 for t in turns if (t.get("answer") or "").strip())
 
 
@@ -62,8 +51,7 @@ def weakest_stage_path(stage_scores: dict) -> str:
 
 
 def _practice_card(facts: dict) -> dict:
-    """'연습' 카드. 방금 면접에서 한 번 더 답해볼 질문이 있으면 맞춤 연습 화면(그 질문을 힌트와 함께 다시 답하기)으로,
-    없으면(질문이 하나도 없는 비정상 면접) 예전처럼 1·2단계 연습 화면으로 보낸다. 점수나 약한 부분의 이름은 문구에 넣지 않는다."""
+    """'연습' 카드를 만든다: 다시 답해 볼 질문이 있으면 맞춤 연습 화면으로, 없으면 1·2단계 연습 화면으로(점수·약점 이름은 넣지 않음)."""
     idx = pick_practice_turn(facts["session"].get("turns", []))
     if idx is not None:
         return {
@@ -161,8 +149,7 @@ def _clean_text(v, max_len: int) -> str | None:
 
 
 def verified_quote(raw, answers: list[str]) -> dict | None:
-    """인용은 **실제 답변에 그대로 있는 문장일 때만** 쓴다(LLM이 지어낸 인용은 버림). 사용자 자신의 말이라도
-    평가·부정적 표현이 들어 있으면 칭찬 근거로 되돌려주지 않는다."""
+    """실제 대답에 그대로 있는 문장만 인용으로 쓴다(지어낸 인용, 평가·부정 표현이 든 문장은 버림)."""
     if not isinstance(raw, dict):
         return None
     text = raw.get("text")

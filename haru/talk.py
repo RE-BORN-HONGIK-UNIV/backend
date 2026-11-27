@@ -1,16 +1,6 @@
-"""
-하루(1·2단계 대화 상대) — 방금 대답에 한 문장 반응하고 다음 질문으로 잇는 말, 그리고 2단계가 끝난 뒤
-"하루가 이렇게 이해했어요" 카드에 보여줄 요약을 만든다.
-
-경량 웹(판넬 OVERVIEW용, reborn-lite)의 /reply를 팀 백엔드 규칙에 맞게 옮긴 것이다. 원본과 다른 점:
-- anthropic==0.69.0 고정 환경이라 effort는 llm_util.effort_options()로 넘기고(원본은 2.x 전용 output_config/fallbacks),
-  JSON 형식은 프롬프트로 요청한 뒤 직접 파싱·검증한다.
-- 위기 신호가 있는 대답은 AI로 보내지 않는다(coach/safety.py와 같은 기준).
-- AI 출력은 길이·금지어(평가·진단 표현)를 검사하고, 통과 못 하면 정해 둔 문장으로 대체한다.
-- 실패해도 502가 아니라 항상 완성된 응답(source='fallback')을 준다 — 화면 흐름이 끊기지 않게.
-- 로그엔 예외 종류만 남긴다(대답 내용은 민감정보).
-
-질문 순서는 화면(frontend features/haru/script.ts)이 정한다. AI는 반응 문장만 만든다.
+"""하루 · 대화 — 1·2단계 대화 상대 하루가 방금 대답에 한 문장 반응하고 다음 질문으로 잇는 말과, "하루가 이렇게 이해했어요" 카드 요약을 만든다.
+질문 순서는 화면(frontend features/haru/script.ts)이 정하고 AI는 반응 문장만 쓴다. 위기 신호면 AI로 보내지 않고, 실패해도 정해 둔 문장으로 항상 응답한다.
+경량 웹에서 옮기며 바꾼 점: docs/haru_설계노트.md
 """
 from __future__ import annotations
 
@@ -75,10 +65,12 @@ PROFILE_SYSTEM = """너는 말하기 연습 웹 "Re-born"의 대화 상대 "하�
 
 
 def _clip(v, n: int) -> str:
+    """값을 글로 바꿔 앞뒤 공백을 지우고 n글자로 자른다."""
     return str(v or "").strip()[:n]
 
 
 def _parse_json(text: str) -> dict | None:
+    """AI 응답 글에서 첫 '{'부터 마지막 '}'까지를 JSON 객체로 읽는다. 실패하면 None."""
     start, end = text.find("{"), text.rfind("}")
     if start == -1 or end <= start:
         return None
@@ -116,6 +108,7 @@ def parse_reply_request(data) -> dict:
 
 
 def reply_prompt(req: dict) -> str:
+    """최근 대화·방금 질문·대답을 AI에게 보낼 글로 만든다."""
     history = "\n".join(f"{'하루' if h['ai'] else '사용자'}: {h['text']}" for h in req["history"])
     return (
         f"최근 대화:\n{history or '(없음)'}\n\n"
@@ -190,8 +183,7 @@ def parse_profile_request(data) -> list[dict]:
 
 
 NAME_LABEL = "부를 이름"
-# "지렁이라고 불러 줘" / "세연이라고 해 주세요" / "제 이름은 지우예요" / "지우요" → 이름만.
-# "○○이라고"는 이름+이(세연이)인지 이름(지렁이)인지 글자로는 못 가르므로 '라고' 앞을 통째로 쓴다 — "세연이"도 부르는 이름으로 자연스럽다.
+# "○○라고 불러 줘"·"제 이름은 ○○예요"에서 이름만 뽑는다('라고' 앞은 통째로 — 이름+이인지 글자로는 못 가른다)
 _NAME_PATTERNS = [
     re.compile(r"([가-힣A-Za-z]{1,10})\s*라고\s*(?:불러|해|하면|부르)"),
     re.compile(r"(?:제|내|저의|나의)\s*이름은\s*([가-힣A-Za-z]{1,10}?)\s*(?:이에요|예요|입니다|이야|야|이요|요|이고|고)?(?:[.!~\s]|$)"),
@@ -217,8 +209,7 @@ def extract_name(answer: str) -> str:
 
 
 def fallback_value(answer: str, label: str = "") -> str:
-    """AI 없이: 대답 앞부분을 그대로 (사용자가 카드에서 고친다). 부를 이름은 이름만 뽑아 본다
-    — "지렁이라고 불러 줘"가 통째로 들어가 3단계 면접관이 그 문장으로 부르던 문제."""
+    """AI 없이 대답 앞부분을 그대로 쓴다(사용자가 카드에서 고친다). 부를 이름은 이름만 뽑는다."""
     if label == NAME_LABEL:
         name = extract_name(answer)
         if name:
@@ -228,6 +219,7 @@ def fallback_value(answer: str, label: str = "") -> str:
 
 
 def profile_prompt(items: list[dict]) -> str:
+    """카드 항목별 질문과 대답을 AI에게 보낼 글로 만든다."""
     return "\n\n".join(
         f"[{i + 1}. {it['label']}]\n질문: {it['question']}\n대답: {it['answer'] or '(없음)'}"
         for i, it in enumerate(items)
