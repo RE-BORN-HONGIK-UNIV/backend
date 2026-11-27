@@ -1,97 +1,94 @@
 # Re-born · backend
 
-발화 불안·사회불안을 가진 고립·은둔 청년을 위한 AI 기반 디지털 재활 웹앱의 Flask 백엔드.
-3단계 파이프라인: **1단계** 음성(채움말·멈춤·CNN 불안도) → **2단계** 표정·시선(MediaPipe
-blendshape 기반 규칙 판정) → **3단계** 모의 면접(LLM 질문 생성 + TTS + STT).
+천천히, 한 단계씩 면접 말하기를 연습하는 웹앱 리본(Re-born)의 Flask 백엔드다.
+3단계 흐름: **1단계** 목소리(채움말·멈춤 규칙 + 연장·떨림·에너지 CNN) → **2단계** 표정·시선(MediaPipe
+blendshape 규칙 판정) → **3단계** 실전 면접(AI 질문 생성 + TTS + STT) → 코치 노트·리포트.
+1·2단계에서는 대화 상대 "하루"가 사용자의 대답에 반응하며 이야기를 이어 간다.
 
 ## 스택
 
 | 영역 | 기술 |
 |---|---|
 | 서버 | Flask 3 + Flask-SQLAlchemy(PostgreSQL, `psycopg2-binary`) + Flask-Cors |
-| 인증 | PyJWT(직접 서명/검증), `werkzeug.security`(비밀번호 해시) |
-| 1단계(음성) | librosa(채움말·멈춤) + torch(CNN 연장·떨림·에너지, CPU-only 빌드) + openai-whisper(STT) |
+| 인증 | PyJWT(직접 서명·검증), `werkzeug.security`(비밀번호 해시), 게스트 계정 |
+| 1단계(목소리) | librosa(채움말·멈춤) + torch(CNN 연장·떨림·에너지, CPU 빌드) + openai-whisper(STT) |
 | 2단계(표정·시선) | mediapipe(blendshape) + opencv-python-headless |
-| 3단계(면접) | Anthropic API(질문 생성, `claude-sonnet-5` 기본) + Typecast(TTS, 면접관별 음성) |
-| 배포 | Render(Blueprint, `render.yaml`) — gunicorn, 무료 티어(RAM ~512MB) 기준 workers=1 |
+| 3단계·코치·하루 | Anthropic API(질문·코치 노트·리포트·하루 대화, 기본 `claude-sonnet-5`) + Typecast(TTS) |
+| 배포 | Render Blueprint(`render.yaml`) — gunicorn, workers 1·threads 2, Standard 플랜(2GB) |
 
 ## 실행
 
 ```bash
-cp .env.example .env   # DATABASE_URL, SECRET_KEY 필수 — 없으면 app.py가 import 시점에 RuntimeError로 죽음
+cp .env.example .env   # DATABASE_URL, SECRET_KEY 필수 — 없으면 app.py를 불러오는 순간 RuntimeError
 pip install -r requirements.txt
 python app.py          # http://localhost:5000
 ```
 
-torch는 CPU-only 인덱스(`--extra-index-url .../whl/cpu`)에서 받아옴 — 배포 환경에
-GPU가 없어서 GPU 빌드(수GB)를 받지 않으려는 목적. mediapipe는 `opencv-python-headless`와만
-호환되니 GUI용 `opencv-python`을 따로 추가하지 말 것(둘이 같이 깔리면 충돌).
-
-DB는 PostgreSQL(2026-09에 MySQL에서 이전 — Render가 매니지드 MySQL을 지원하지 않아서).
-로컬도 `.env.example`과 동일한 `postgresql+psycopg2://` 형식으로 맞춰야 배포 환경과 같은 조건으로
-테스트됨.
+- torch는 CPU 전용 인덱스(`--extra-index-url .../whl/cpu`)에서 받는다. 배포 서버에 GPU가 없어 수 GB짜리 GPU 빌드를 피한다.
+- mediapipe는 `opencv-python-headless`와만 맞는다. GUI용 `opencv-python`을 같이 깔면 충돌한다.
+- DB는 PostgreSQL이다(2026-09 MySQL에서 이전 — Render가 매니지드 MySQL을 지원하지 않음). 로컬도 `postgresql+psycopg2://` 형식으로 맞춰야 배포와 같은 조건으로 테스트된다.
+- CNN 모델 파일은 저장소에 없다. `models/<label>/model.pth` + `config.json`을 손으로 넣는다(label: `prolongation`·`tremor`·`energy`). 없는 라벨은 `pending`으로 두고 서버는 그대로 뜬다.
 
 ## 구조
 
 ```
-app.py          Flask 라우트 전체 (인증, /analyze*, /community/*, /interview/*)
-step1/          음성 분석 — analyze_filler.py(채움말)·analyze_pause.py(멈춤), model.py·audio_prep.py(CNN, voice-cnn에서 복사),
-                llm_feedback.py(코칭 피드백 생성, 순수 함수는 _user_prompt)
-step2/          표정·시선 — *_analyzer.py(blink/gaze/expression), scoring.py, set_baseline.py,
-                landmark_face_points.py(랜드마크 인덱스 + MediaPipe 세션 초기화)
-                ACCURACY_NOTES.md — 임계값 근거·검증 이력(문헌 인용 + 실측 검증)
-coach/          면접 직후 코치 노트 에이전트 — 순수 로직(schema·safety·missions·tools)과 LLM 루프(agent.py), 맞춤 연습 힌트(practice.py)
-                일상 미션(missions.py)은 초안, 전문가 검토 전 확정 금지
-step3/          면접 질문(interview_question.py) · TTS(tts.py, Typecast)
-tests/          유닛테스트(pytest) + tests/labeling/(정확도 검증 하네스, 수동)
-docs/           DB_DESIGN.md, TESTING.md(테스트 하네스 계층 설계)
-render.yaml     Render Blueprint — 웹 서비스 + Postgres DB를 이 파일 하나로 생성
+app.py          Flask 앱 — DB 표, 모든 API 라우트
+db_url.py       DATABASE_URL 드라이버를 psycopg2로 고정
+llm_util.py     AI 호출 도우미(effort 설정을 SDK 버전과 상관없이 넘김)
+step1/          목소리 분석 — analyze_filler(채움말)·analyze_pause(멈춤), model·audio_prep(CNN, voice-cnn에서 복사),
+                energy_rule(에너지 보조 규칙), stage1_score(점수), report_detail(리포트 세부 값),
+                llm_feedback(코칭 한 문단), whisper_guard(Whisper 동시 사용 막기), analyze_options(단계별 저장 여부)
+step2/          표정·시선 — *_analyzer(깜빡임·시선·표정), scoring, set_baseline, landmark_face_points,
+                live_payload(실시간 결과 검증), ACCURACY_NOTES.md(임계값 근거·검증 이력)
+step3/          면접 — interview_question(질문 생성), anxiety(불안도 → 난이도), session_payload(기록 검증), tts(Typecast)
+coach/          면접 뒤 코치 — agent(코치 노트 에이전트), report(리포트 3·4번 칸), practice(연습 힌트·횟수 제한),
+                schema·safety·tools·missions(검증·위기 신호·조회 도구·일상 미션 초안)
+haru/           하루 대화 — talk(대답 반응·"하루가 이렇게 이해했어요" 정리)
+tests/          pytest 유닛·API 테스트, labeling/(정확도 검증 도구, 수동), manual/(수동 점검 스크립트)
+docs/           설계노트(step1_·step3_·coach_·haru_·공통_), 임계값 근거(*_근거.md), REFERENCES.md, DB_DESIGN.md, TESTING.md
+render.yaml     Render Blueprint — 웹 서비스 + Postgres DB
 ```
 
-## API 엔드포인트
+## API
 
-- **인증** — `POST /api/signup`, `POST /api/login`, `POST /api/guest`(로그인 없이 시작 — 이름 없는 게스트 계정을 만들어 30일 토큰 발급, IP당 시간당 20개), `PUT /api/me/nickname`(웹에서 불러 줄 이름, User.nickname에 저장, 20자까지)
-- **1단계(음성)** — `POST /analyze`(업로드 → 오각형 점수), `POST /analyze/feedback`(LLM 코칭 피드백, 실패 시 템플릿 폴백), `GET /analyze/stage1/latest`(저장된 최신 결과 조회 — 3단계 난이도 산정·ai-agent용, 로그인 필요)
-- **2단계(표정·시선)** — `POST /analyze/gaze-blink`(업로드 → 깜빡임·시선·표정 지표 + 하이라이트 클립), `POST /analyze/gaze-blink/live`(실시간 촬영 결과 요약 저장 — 영상 없이 숫자만, 저장 직전 기록을 `previous`로 반환), `GET /analyze/stage2/latest`(재분석 없이 최신 점수 조회 — 3단계 난이도 산정·ai-agent용, 로그인 필요)
-- **3단계(면접)** — `POST /interview/next-question`(tier + 기본/꼬리질문 `mode` 기반 질문 생성, 로그인 시 최신 1·2단계 세부 점수로 질문 방식 조절 + 지난 면접의 기본 질문과 겹치지 않게, 실패 시 고정 질문 폴백), `POST /interview/tts`(질문 텍스트 → 면접관(`tier`)별 음성), `POST /interview/transcribe`(답변 STT), **면접 기록(로그인 필요, 본인만)** — `POST /interview/sessions`(시작), `POST /interview/sessions/<id>/turns`(질문 저장), `PUT /interview/sessions/<id>/turns/<turn_id>/answer`(답변 텍스트 저장), `POST /interview/sessions/<id>/complete`(완료), `GET /interview/sessions`(목록), `GET /interview/sessions/<id>`(질문·답변 상세), `DELETE /interview/sessions/<id>`(삭제), `POST /interview/sessions/<id>/coach-note`(면접 직후 코치 노트 — 이미 있으면 그대로, 없으면 에이전트가 생성해 저장), `POST /interview/practice-hint`(맞춤 연습의 힌트 — 질문 하나를 다시 답할 때의 시작 문장 틀·말하는 순서, 로그인 필요·사용자당 시간당 20회 제한, AI 실패 시 일반 힌트)
+로그인이 필요한 API는 `Authorization: Bearer <token>` 헤더를 쓴다. 게스트 토큰도 똑같이 쓰인다.
+
+- **인증** — `POST /api/signup`, `POST /api/login`(7일 토큰), `POST /api/guest`(로그인 없이 시작 — 게스트 계정과 30일 토큰, IP당 시간당 20개), `PUT /api/me/nickname`(불러 줄 이름, 20자까지)
+- **1단계(목소리)** — `POST /api/stage1/calibrate`(마이크 확인 녹음으로 개인 기준값), `POST /analyze`(녹음 → 목소리 5개 점수·리포트 세부 값, `stage` 1·2일 때 저장), `POST /analyze/feedback`(코칭 한 문단, AI 실패 시 템플릿), `GET /analyze/stage1/latest`
+- **2단계(표정·시선)** — `POST /analyze/gaze-blink`(업로드 영상 → 깜빡임·시선·표정 + 하이라이트 클립), `POST /analyze/gaze-blink/live`(실시간 통화 결과 숫자만 저장), `GET /analyze/stage2/latest`
+- **하루 대화** — `POST /haru/reply`(대답에 한 문장 반응 + 다음 질문), `POST /haru/profile`("하루가 이렇게 이해했어요" 카드, 저장 안 함). 사용자당 시간당 120회
+- **3단계(면접)** — `GET /interview/anxiety`(1·2단계 최신 결과 → 난이도), `POST /interview/next-question`(기본·꼬리질문, AI 실패 시 고정 질문), `POST /interview/tts`(문장 → 면접관·하루 목소리 mp3), `POST /interview/transcribe`(대답 영상 STT)
+- **면접 기록(본인만)** — `POST/GET /interview/sessions`, `GET/DELETE /interview/sessions/<id>`, `POST /interview/sessions/<id>/turns`, `PUT /interview/sessions/<id>/turns/<turn_id>/answer`, `POST /interview/sessions/<id>/complete`
+- **코치** — `POST /interview/sessions/<id>/coach-note`(면접 직후 코치 노트), `POST /interview/sessions/<id>/report-coach`(리포트 다듬은 대답·다음 연습 계획) — 둘 다 면접당 한 번 만들어 저장. `POST /interview/practice-hint`(맞춤 연습 힌트, 사용자당 시간당 20회)
 - **커뮤니티("이야기")** — `GET/POST /community/posts`, `GET/DELETE /community/posts/<id>`, `POST /community/posts/<id>/comments`
 - **기타** — `GET /health`
 
+AI 키가 없거나 호출이 실패해도 AI를 쓰는 API는 정해 둔 문장으로 답한다. 키 없이도 전체 흐름이 끝까지 돈다.
+
 ## 환경변수 (`.env`, `.env.example` 참고)
 
-- `DATABASE_URL` — PostgreSQL 접속 정보. 필수(없으면 앱이 안 뜸)
-- `SECRET_KEY` — JWT 서명 키, 예측 불가능한 임의 문자열. 필수
-- `ANTHROPIC_API_KEY` — 없으면 `step1/llm_feedback.py`·`step3/interview_question.py`가 자동으로 폴백(템플릿/고정 질문)
-- `FEEDBACK_MODEL` — 선택, 기본 `claude-sonnet-5`
-- `INTERVIEW_MODEL` — 선택, 3단계 질문 생성 모델 (기본 `claude-sonnet-5`)
-- `TYPECAST_API_KEY` — 3단계 면접관 음성(TTS). 없으면 음성 없이 진행(프론트가 폴백)
-- `TYPECAST_VOICE_WARMUP` / `TYPECAST_VOICE_STANDARD` / `TYPECAST_VOICE_PRACTICE` — 면접관별 음성 ID. 비어 있으면 standard 음성으로 대체, `TYPECAST_MODEL`은 선택(기본 `ssfm-v30`)
-- `COACH_MODEL` — 선택, 면접 직후 코치 노트 에이전트 모델 (기본 `claude-sonnet-5`)
-- `CARE_RESOURCES` — 선택, 답변에서 위기 신호가 감지됐을 때 결과 화면에 보여줄 도움 안내 문구(기관·연락처). **팀이 확정한 내용만** 넣을 것 — 비어 있으면 일반적인 돌봄 문구만 나옴
-- `MODELS_DIR` — 1단계 CNN 모델 폴더(기본 `models`, 라벨별 `models/<label>/model.pth` + `config.json`), 선택
+- `DATABASE_URL` — PostgreSQL 주소. 필수
+- `SECRET_KEY` — JWT 서명 키(예측할 수 없는 긴 문자열). 필수
+- `ANTHROPIC_API_KEY` — 없으면 AI를 쓰는 곳이 모두 정해 둔 문장으로 대신한다
+- `FEEDBACK_MODEL` · `INTERVIEW_MODEL` · `COACH_MODEL` · `HARU_MODEL` — 선택, 기본 `claude-sonnet-5`
+- `TYPECAST_API_KEY` — 면접관·하루 목소리. 없으면 프론트가 미리 녹음한 mp3나 브라우저 목소리로 대신한다
+- `TYPECAST_VOICE_WARMUP` / `_STANDARD` / `_PRACTICE` / `_HARU` — 목소리 ID. 면접관은 비면 standard 목소리, 하루는 기본 목소리. `TYPECAST_MODEL`은 선택(기본 `ssfm-v30`)
+- `CARE_RESOURCES` — 선택, 대답에서 위기 신호가 보였을 때 보여 줄 도움 안내(팀이 확정한 문구만). 비면 일반 돌봄 문구
+- `MODELS_DIR` — 선택, CNN 모델 폴더(기본 `models`)
+- `PRELOAD_MODELS` — `1`이면 서버가 켜지자마자 모델을 미리 불러 첫 사용자의 1~3분 대기를 없앤다. 메모리 2GB 이상에서만 켠다(무료 512MB에서는 켜자마자 꺼짐)
 
-## 테스트 — 3계층 (자세한 설계는 `docs/TESTING.md`)
+## 테스트 (설계는 `docs/TESTING.md`)
 
-1. **순수 로직 유닛테스트** (CI 연동, `tests/test_*.py`, labeling 하위 제외)
-   ```bash
-   pip install numpy opencv-python-headless pytest   # torch/whisper/mediapipe 불필요
-   pytest tests/test_scoring.py tests/test_blink_analyzer.py tests/test_expression_analyzer.py \
-          tests/test_gaze_analyzer.py tests/test_interview_question.py tests/test_llm_feedback.py -v
-   ```
-   대상: 임계값 비교·집계·프롬프트 조립처럼 입력→출력이 결정적인 함수.
+```bash
+pytest -q
+```
 
-2. **정확도 검증 하네스** (수동, CI 밖) — `tests/labeling/extract_label_candidates.py`로
-   영상에서 프레임+점수 CSV 추출 → 사람이 라벨링 → `evaluate_threshold.py`로
-   precision/recall/accuracy 계산. 결과·근거는 `step2/ACCURACY_NOTES.md`에 기록.
+1. **순수 로직 유닛 테스트** — 임계값 비교·점수 집계·프롬프트 조립·요청 검증처럼 입력과 출력이 정해진 함수. torch·whisper·mediapipe 없이 돈다.
+2. **API 테스트** — `tests/test_guest_api.py`가 임시 sqlite와 Flask test client로 게스트 흐름을 확인한다. flask가 없는 환경에서는 건너뛴다.
+3. **정확도 검증 도구** (수동, CI 밖) — `tests/labeling/`으로 영상·녹음에서 후보를 뽑아 사람이 라벨링하고 precision·recall을 계산한다. 결과와 근거는 `step2/ACCURACY_NOTES.md`, `docs/*_근거.md`에 적는다.
 
-3. **API/통합 테스트** — 아직 없음. `app.py`가 torch/whisper/mediapipe를 라우트 함수 안
-   lazy-import로 옮겨둬서(`_init_torch()`, `load_models()` 참고) Flask test client로 `/health`,
-   `/api/signup` 같은 가벼운 라우트는 무거운 의존성 없이 테스트할 수 있음 — 아직 안 쌓였을 뿐.
-
-push/PR 시 GitHub Actions에서 문법 검사(ruff) + 위 1번 테스트를 자동으로 확인합니다
-(`.github/workflows/ci.yml`).
+push·PR마다 GitHub Actions(`.github/workflows/ci.yml`)가 문법 검사, ruff(`F` 규칙), 가벼운 유닛 테스트 목록을 돌린다.
 
 ## 트러블슈팅 기록
 
-과거에 겪은 버그·오탐/미검출 이슈와 해결 과정은 별도 레포
-`re-born-hongik-univ/trouble-shooting`의 `backend/`에 이슈 1건당 파일 1개로 정리돼 있음.
+예전에 겪은 버그·오탐·미검출과 해결 과정은 별도 저장소 `re-born-hongik-univ/trouble-shooting`의 `backend/`에 이슈 하나당 파일 하나로 정리돼 있다.
