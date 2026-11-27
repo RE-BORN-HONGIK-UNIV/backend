@@ -1,10 +1,5 @@
-"""
-코치 에이전트가 쓰는 도구 (순수 함수, DB 없음).
-
-도구는 app.py가 DB에서 미리 모아 둔 `facts`를 들여다보는 얇은 창이다. 도구에 user_id 같은 인자를 받지 않는
-것이 핵심 — facts가 이미 **그 면접의 주인** 것만 담고 있어서, 에이전트가 다른 사용자의 데이터를 조회할 방법이
-구조적으로 없다. 1·2단계 점수는 숫자를 주지 않고 "기록 여부와 약한 영역 이름"만 준다: 숫자를 모르면 LLM이 점수를
-말해버릴 수도 없다.
+"""코치 · 에이전트 도구 — app.py가 미리 모아 둔 facts만 들여다본다. user_id 같은 인자가 없어 다른 사용자의 기록을 조회할 길이 구조적으로 없다.
+1·2단계는 점수 숫자 대신 기록 여부와 약한 영역 이름만 준다(숫자를 모르면 AI가 점수를 말할 수도 없다).
 """
 from __future__ import annotations
 
@@ -49,6 +44,7 @@ TOOL_DEFINITIONS = [
 
 
 def _weak_areas(stage_scores: dict) -> list[str]:
+    """1·2단계 점수 중 70 미만인 영역 이름을 낮은 순으로 돌려준다."""
     out: list[tuple[float, str]] = []
     for stage in ("stage1", "stage2"):
         for axis, v in (stage_scores.get(stage) or {}).items():

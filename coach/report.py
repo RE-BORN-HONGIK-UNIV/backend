@@ -1,9 +1,5 @@
-"""
-리포트 3·4번 칸 AI — 다듬을 대답만 다듬은 말(3번)과 다음 연습 계획(4번)을 Claude 한 번 호출로 만든다.
-
-고르기·숫자·검사는 코드가 하고 Claude는 문장만 쓴다. 어떤 대답을 다듬을지는 브라우저가 보낸 질문별 말버릇·멈춤
-숫자와 서버의 대답 글자로 코드가 고른다(말버릇 표시는 브라우저가 만들어서 서버엔 숫자가 없음).
-AI가 실패해도 항상 완성된 결과를 돌려준다(빈 다듬은 말·빈 계획 → 프론트가 내가 한 말·기본 팁으로 보여 줌).
+"""코치 · 리포트 AI — 리포트 3번 칸(다듬은 말)과 4번 칸(다음 연습 계획)을 Claude 한 번 호출로 만든다.
+어떤 대답을 다듬을지 같은 고르기·숫자·검사는 코드가 하고 AI는 문장만 쓰며, 실패해도 항상 완성된 결과를 돌려준다.
 """
 from __future__ import annotations
 
@@ -106,9 +102,9 @@ def pick_rewrite_turns(turns: list[dict], stats: list[dict]) -> list[dict]:
 
 
 def keeps_content(original: str, text: str) -> bool:
-    """다듬은 말이 원래 대답에 없는 내용을 더하지 않았는지. 숫자는 원래 대답에 있어야 하고,
-    낱말 앞 두 글자가 원래 대답에 없는 낱말이 30%를 넘으면 버린다.
-    shortcut: 낱말 앞 두 글자 비교라 바꿔 쓴 말도 새 낱말로 셀 수 있다, 너무 많이 버려지면 형태소 분석으로 바꾼다."""
+    """다듬은 말이 원래 대답에 없는 내용(없던 숫자, 새 낱말 30% 초과)을 더하지 않았으면 True.
+    shortcut: 낱말 앞 두 글자 비교라 바꿔 쓴 말도 새 낱말로 셀 수 있다, 너무 많이 버려지면 형태소 분석으로 바꾼다.
+    """
     flat = re.sub(r"\s+", "", original)
     if any(d not in flat for d in re.findall(r"\d+", text)):
         return False
@@ -120,6 +116,7 @@ def keeps_content(original: str, text: str) -> bool:
 
 
 def _clean(v, max_len: int) -> str | None:
+    """글의 공백을 정리해 길이·금지어 검사를 통과하면 돌려주고, 아니면 None."""
     if not isinstance(v, str):
         return None
     s = re.sub(r"\s+", " ", v).strip()

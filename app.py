@@ -1,13 +1,10 @@
-"""
-Re-born 보이스 터치 - Flask 백엔드 (최종 버전)
-- CNN: 라벨별 이진 모델(연장·떨림·에너지), 3초 조각 확률의 최댓값
-- 채움말: librosa 소리구간 + Whisper word timestamp 결합
-- 멈춤: librosa 기반 불안한 멈춤 분석
+"""공통 · 서버 — Flask 앱 하나에 DB 표, 로그인·게스트, 1·2·3단계 분석, 면접 기록, 코치·하루 대화 API를 모은다.
+무거운 라이브러리(torch·whisper·mediapipe)는 쓰는 함수 안에서 불러 가벼운 API의 메모리를 아낀다. 배경: docs/공통_설계노트.md
 """
 
 import os
 from dotenv import load_dotenv
-load_dotenv(encoding='utf-8')  # .env 파일 읽어서 환경변수로 등록
+load_dotenv(encoding='utf-8')
 
 import base64
 import secrets
@@ -28,22 +25,7 @@ from sqlalchemy.exc import IntegrityError
 from step3.tts import synthesize_speech
 from db_url import normalize_database_url
 
-# torch, whisper, step2의 mediapipe·cv2 기반 모듈(landmark_face_points,
-# gaze_analyzer)은 여기서 import하지 않고 실제로 쓰는 함수 안에서 지연 import한다.
-# 이유: 이것들만으로도 수백MB가 프로세스 메모리에 항상 올라가는데, /health·로그인·
-# 커뮤니티처럼 이 라이브러리가 전혀 필요 없는 라우트도 같은 워커에서 뜨기 때문에,
-# 모듈 최상단에서 import하면 그 라우트만 받는 워커도 무조건 이 비용을 낸다
-# (배포 환경 메모리 제한 때문에 2026-09 경량화 작업으로 옮김. load_models() 참고).
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv(encoding='utf-8')  # .env 파일이 있으면 읽어옴 (없으면 그냥 넘어감 — python-dotenv는 선택 설치)
-except ImportError:
-    pass
-
-# Step2 시선/깜빡임 모듈 import — blink_analyzer/expression_analyzer/scoring/set_baseline은
-# numpy만 써서 가벼우니 그대로 상단에 둠. mediapipe/cv2가 필요한 landmark_face_points·
-# gaze_analyzer는 analyze_gaze_blink() 안에서 지연 import.
+# 2단계 중 numpy만 쓰는 모듈은 여기서, mediapipe·cv2가 필요한 모듈은 analyze_gaze_blink() 안에서 불러온다
 from step2.blink_analyzer import (
     compute_ear_series, detect_blinks,
     compute_blink_blendshape_series, detect_blinks_from_blendshape,
@@ -53,50 +35,32 @@ from step2.scoring import score_blink_rate, score_gaze_segments, score_expressio
 from step2.set_baseline import calibrate_baseline_ear, calibrate_baseline_gaze
 from step2.live_payload import parse_live_result
 
-
-# Step1 채움말 분석 (librosa 소리구간 + Whisper word timestamp 결합)
 from step1.analyze_filler import analyze_filler, analyze_calibration
-
-# Step1 멈춤 분석 (librosa 소리구간 사이 무음 길이 기반, 1.2초 이상 "긴 멈춤"으로 분류)
 from step1.analyze_pause import analyze_pause
 from step1.report_detail import build_report_detail
-
-# Step1 LLM 코칭 피드백 (선택적 — 키 없으면 자동 폴백)
 from step1.llm_feedback import generate_feedback
-
-# Step1 CNN 입력 손질 (voice-cnn/src/audio_prep.py 복사본 — 학습과 똑같이 손질해야 함)
+# CNN 입력 손질은 voice-cnn에서 복사한 것 — 학습 때와 똑같이 손질해야 한다
 from step1 import audio_prep, energy_rule
-
-# Step1 종합 점수 (Stage1Result에 저장할 값 — 프론트 overallScore와 동일 공식)
 from step1.stage1_score import overall_score as stage1_overall_score, window_score
 
-# Step3 면접 질문 생성 (선택적 — 키 없으면 자동 폴백)
 from step3.interview_question import clean_about_me, generate_question
-
-# Step3 불안도 → 난이도 (연구 근거 가중치, 사용자에게 안 보임)
 from step3.anxiety import anxiety_score, tier as anxiety_tier
 from step3.anxiety import blink_item as anxiety_blink_item, gaze_item as anxiety_gaze_item, worse as anxiety_worse
 
-# 면접 직후 코치 노트 에이전트 (이력 조회 도구 + 검증 + 대체 노트)
 from coach.agent import MODEL as COACH_MODEL, generate_note as generate_coach_note
 from coach.report import generate_report_coach, parse_report_request
 from coach.practice import RateLimiter, generate_hint, parse_hint_request
 from haru.talk import generate_reply, parse_profile_request, parse_reply_request, summarize_profile
 
-# Step3 면접 기록(세션·질문·답변) 요청 검증
 from step3.session_payload import (
     MAX_TURNS_PER_SESSION, parse_answer, parse_session_start, parse_turn,
 )
 
-# whisper 모듈 자체는 load_models() 안에서 지연 import. 그 전까지는 "아직 모른다"가
-# 아니라 "안 붙어있다"로 취급 — analyze_filler()/interview_transcribe()가 load_models()
-# 호출 전에 이 값을 참조할 일은 없지만(두 라우트 모두 진입 시점에 load_models()를 먼저
-# 부름), 혹시 몰라 안전한 기본값으로 초기화해둔다.
+# load_models()가 whisper를 불러오기 전까지는 "없음"으로 둔다
 WHISPER_AVAILABLE = False
 
 def _require_env(key):
-    """비밀번호/서명키처럼 코드에 하드코딩하면 안 되는 값 — .env 또는 환경변수로 필수 주입.
-    backend/.env.example 참고해서 backend/.env 만들 것 (.env는 .gitignore에 이미 포함됨)."""
+    """비밀 값(DB 주소·서명 키)을 환경변수에서 읽고, 없으면 .env.example을 안내하며 멈춘다."""
     value = os.environ.get(key)
     if not value:
         raise RuntimeError(
@@ -109,17 +73,14 @@ def _require_env(key):
 app = Flask(__name__)
 CORS(app)
 
-# Render가 주는 connectionString은 "postgres://" 스킴인데, SQLAlchemy 1.4+
-# (Flask-SQLAlchemy 3.x)는 이 스킴을 완전히 버려서 NoSuchModuleError로 죽는다.
-# 또 드라이버 없는 "postgresql://"은 SQLAlchemy 2.1부터 기본 드라이버가 psycopg(v3)로 바뀌어
-# psycopg2-binary만 설치한 이 프로젝트에선 ModuleNotFoundError가 난다 — 그래서 어느 스킴으로
-# 들어오든 드라이버를 psycopg2로 명시해서 넣는다 (db_url.py 참고).
+# 드라이버를 psycopg2로 못 박는다 (db_url.py)
 _database_url = normalize_database_url(_require_env('DATABASE_URL'))
 app.config['SQLALCHEMY_DATABASE_URI'] = _database_url
 app.config['SECRET_KEY'] = _require_env('SECRET_KEY')
 db = SQLAlchemy(app)
 
 class User(db.Model):
+    """회원·게스트 계정. 게스트는 이메일 도메인으로 구분한다(GUEST_EMAIL_DOMAIN)."""
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(200), nullable=False)
@@ -131,8 +92,7 @@ class User(db.Model):
 
 
 class Stage1Result(db.Model):
-    """1단계(음성) 분석 결과 — 3단계 면접 난이도 산정과 ai-agent의 이력 조회용으로 유저별 저장.
-    기존엔 프론트 localStorage(`rb.stage1.score`)에만 있어서 서버가 값을 알 방법이 없었다."""
+    """1단계 목소리 점수 — 3단계 난이도와 코치 이력 조회에 쓴다."""
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
@@ -146,6 +106,7 @@ class Stage1Result(db.Model):
     overall_score = db.Column(db.Float, nullable=False)
 
     def to_entry(self):
+        """프론트가 쓰는 camelCase 모양으로 돌려준다."""
         return {
             'at': self.created_at.isoformat(),
             'stability': self.stability,
@@ -158,8 +119,7 @@ class Stage1Result(db.Model):
 
 
 class Stage2VoiceResult(db.Model):
-    """2단계 통화 녹음의 목소리 점수 — 3단계 불안도에만 쓴다(1단계 점수·대시보드는 그대로).
-    Stage1Result에 단계 칸을 더하면 이미 배포된 DB에는 create_all로 반영되지 않아 새 표로 둔다."""
+    """2단계 통화의 목소리 점수 — 3단계 불안도에만 쓴다(기존 DB에 칸을 못 더해 새 표로 둠)."""
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
@@ -171,8 +131,7 @@ class Stage2VoiceResult(db.Model):
 
 
 class Stage2Result(db.Model):
-    """2단계(표정·시선) 분석 결과 — 세션 간 비교("지난번엔 ~했어요")를 위해 유저별로 쌓아둔다.
-    프론트 localStorage 이력을 대체 (기기 바뀌면 날아가던 문제 해결)."""
+    """2단계 표정·시선 결과 — "지난번 대비" 비교와 3단계 난이도에 쓴다."""
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
@@ -190,7 +149,7 @@ class Stage2Result(db.Model):
     expression_status = db.Column(db.String(20), nullable=False)
 
     def to_entry(self):
-        """프론트 Stage2Entry와 동일한 shape — 그대로 previous 비교에 쓸 수 있게."""
+        """프론트 Stage2Entry 모양으로 돌려준다(previous 비교용)."""
         return {
             "at": self.created_at.isoformat(),
             "blinkRatePerMin": self.blink_rate_per_min,
@@ -201,26 +160,23 @@ class Stage2Result(db.Model):
 
 
 class InterviewSession(db.Model):
-    """3단계 모의 면접 1회. 질문이 나올 때마다 InterviewTurn이 쌓이고, 끝까지 마치면 completed_at이
-    채워진다 — 중간에 나가도 그때까지의 기록은 남음(completed_at이 비어 있는 채로).
-    용도: 결과 화면, 대시보드 완료 표시, ai-agent의 면접 이력 조회."""
+    """3단계 면접 1회. 중간에 나가도 기록은 남고 completed_at만 빈다."""
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
     tier = db.Column(db.String(20), nullable=False)  # warmup / standard / practice (면접관)
     started_at = db.Column(db.DateTime, default=datetime.datetime.utcnow, nullable=False)
     completed_at = db.Column(db.DateTime, nullable=True)
 
-    # 세션을 지우면 질문/답변도 함께 지워진다 (삭제 API = 본인 답변 텍스트 삭제 수단)
+    # 대답 글·인용·다듬은 대답이 들어 있어 세션을 지우면 함께 지운다
     turns = db.relationship(
         'InterviewTurn', backref='session', cascade='all, delete-orphan',
         order_by='InterviewTurn.order_index',
     )
-    # 면접 직후 코치 노트(1:1). 노트에는 사용자의 답변에서 인용한 문장이 들어가므로 세션과 함께 삭제된다.
     coach_note = db.relationship('CoachNote', backref='session', uselist=False, cascade='all, delete-orphan')
-    # 리포트 3·4번 칸 AI 결과(1:1). 다듬은 대답이 들어 있어 세션과 함께 삭제된다.
     report_coach = db.relationship('ReportCoach', backref='session', uselist=False, cascade='all, delete-orphan')
 
     def to_summary(self):
+        """질문·대답 본문 없이 요약만 돌려준다."""
         return {
             'id': self.id,
             'tier': self.tier,
@@ -230,12 +186,12 @@ class InterviewSession(db.Model):
         }
 
     def to_detail(self):
+        """요약에 질문·대답 전체를 붙여 돌려준다."""
         return {**self.to_summary(), 'turns': [t.to_entry() for t in self.turns]}
 
 
 class InterviewTurn(db.Model):
-    """면접 중 질문 1개와 그에 대한 답변 텍스트(음성 인식 결과를 유저가 확인·수정한 값).
-    영상·음성 파일은 저장하지 않는다 — 텍스트만. 답변을 아직 안 했거나 건너뛰면 answer는 None/''."""
+    """질문 1개와 대답 글(사용자가 확인한 음성 인식). 영상·음성 파일은 저장하지 않는다."""
     id = db.Column(db.Integer, primary_key=True)
     session_id = db.Column(db.Integer, db.ForeignKey('interview_session.id'), nullable=False, index=True)
     order_index = db.Column(db.Integer, nullable=False)  # 0부터, 질문이 나온 순서
@@ -246,6 +202,7 @@ class InterviewTurn(db.Model):
     answered_at = db.Column(db.DateTime, nullable=True)
 
     def to_entry(self):
+        """프론트가 쓰는 모양으로 돌려준다."""
         return {
             'id': self.id,
             'order': self.order_index,
@@ -258,8 +215,7 @@ class InterviewTurn(db.Model):
 
 
 class CoachNote(db.Model):
-    """면접 직후 코치 노트 — 해낸 것·내 말 인용·다음 한 걸음 카드(coach/ 에이전트가 만들고 검증한 JSON).
-    면접 1회당 1개(session_id unique)라서 결과 화면을 다시 열어도 AI를 다시 부르지 않는다(비용·일관성)."""
+    """면접 직후 코치 노트 JSON. 면접당 1개라 다시 열어도 AI를 다시 부르지 않는다."""
     id = db.Column(db.Integer, primary_key=True)
     session_id = db.Column(db.Integer, db.ForeignKey('interview_session.id'), nullable=False, unique=True)
     content = db.Column(db.Text, nullable=False)       # 노트 JSON (coach/schema.py 형태)
@@ -269,8 +225,7 @@ class CoachNote(db.Model):
 
 
 class ReportCoach(db.Model):
-    """리포트 3·4번 칸 — 다듬은 대답과 다음 연습 계획(coach/report.py가 만들고 검사한 JSON).
-    면접 1회당 1개라서 리포트를 다시 열어도 AI를 다시 부르지 않는다."""
+    """리포트 3·4번 칸(다듬은 대답·다음 연습 계획) JSON. 면접당 1개."""
     id = db.Column(db.Integer, primary_key=True)
     session_id = db.Column(db.Integer, db.ForeignKey('interview_session.id'), nullable=False, unique=True)
     content = db.Column(db.Text, nullable=False)       # 결과 JSON
@@ -288,6 +243,7 @@ class Post(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
     def to_dict(self, comment_count=0, current_user=None):
+        """작성자 이름과 본인 글 여부를 붙여 돌려준다."""
         author = User.query.get(self.user_id)
         return {
             'id': self.id,
@@ -309,6 +265,7 @@ class Comment(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
     def to_dict(self, current_user=None):
+        """작성자 이름과 본인 댓글 여부를 붙여 돌려준다."""
         author = User.query.get(self.user_id)
         return {
             'id': self.id,
@@ -320,7 +277,7 @@ class Comment(db.Model):
 
 
 def get_current_user():
-    """Authorization: Bearer <token> 헤더의 JWT를 검증해 User를 반환. 없거나 무효하면 None."""
+    """Bearer 토큰(JWT)을 검증해 User를 돌려준다. 없거나 잘못되면 None."""
     header = request.headers.get('Authorization', '')
     if not header.startswith('Bearer '):
         return None
@@ -332,10 +289,7 @@ def get_current_user():
     return User.query.get(payload.get('user_id'))
 
 
-# 테이블 생성 — 예전엔 `if __name__ == '__main__':` 블록에서만 호출돼서, gunicorn
-# 같은 WSGI 서버로 띄우면(배포 시 쓰는 방식) 이 코드가 한 번도 안 돌고 테이블이
-# 영영 안 생겨서 모든 DB 라우트가 깨지는 문제가 있었다 — 모듈 로드 시점(워커 프로세스
-# 시작 시 1회)에 바로 실행하도록 옮김. DB 연결 실패 시에도 앱 자체는 뜨게 폴백.
+# gunicorn은 __main__을 거치지 않으므로 불러오는 시점에 표를 만든다. DB가 없어도 서버는 켠다
 try:
     with app.app_context():
         db.create_all()
@@ -343,23 +297,17 @@ except Exception as e:
     print(f"[WARNING] DB 연결 실패, DB 없이 서버 실행: {e}")
 
 # ── CNN 모델 (라벨별 이진 모델) ──────────────────────────────────────
-# models/<label>/에 model.pth(state_dict)와 config.json(손질 값·정규화·기준선)을 손으로 넣는다.
-# 설계도(step1/model.py)와 손질(step1/audio_prep.py)은 voice-cnn에서 복사한 파일이다.
+# models/<label>/에 model.pth와 config.json(손질 값·정규화·기준선)을 손으로 넣는다
 MODELS_DIR = os.environ.get("MODELS_DIR", "models")
 CNN_LABELS = ('prolongation', 'tremor', 'energy')
 cnn_models = {}  # label -> (model, cfg). 없는 라벨은 pending
 whisper_model = None
 _models_loaded = False
-# 서버가 켜질 때 뒤에서 미리 불러오는 동안 요청이 들어와도(PRELOAD_MODELS) 반쯤 불린 모델을 쓰지 않게 —
-# 먼저 온 쪽이 다 불러올 때까지 다른 쪽은 기다린다
+# 미리 불러오는 중에 요청이 와도 반쯤 불린 모델을 쓰지 않게 한다
 _models_lock = threading.Lock()
 
 def load_models():
-    """CNN/Whisper 모델 로드 — 최초 요청 시점에 한 번만 실행되는 지연 로딩.
-    예전엔 `if __name__ == '__main__':` 블록에서만 불려서, gunicorn 등 WSGI 서버로
-    띄우면(배포 환경이 이 방식) 이 함수 자체가 한 번도 안 불리고 모델이 영영 None으로
-    남는 버그가 있었다 — /analyze, /interview/transcribe 라우트 진입 시 직접 호출하는
-    방식으로 바꿔서 실행 방식(개발 서버/gunicorn 등)과 무관하게 항상 동작하게 했다."""
+    """CNN·Whisper를 처음 필요할 때 한 번만 불러온다(모델을 쓰는 API가 맨 앞에서 부름)."""
     global whisper_model, WHISPER_AVAILABLE, _models_loaded
     if _models_loaded:
         return
@@ -371,6 +319,7 @@ def load_models():
 
 
 def _load_models_locked():
+    """라벨별 CNN과 Whisper를 불러온다. 실패한 라벨은 pending으로 두고 서버는 그대로 켠다."""
     global whisper_model, WHISPER_AVAILABLE
 
     for label in CNN_LABELS:
@@ -379,7 +328,7 @@ def _load_models_locked():
             print(f"[WARNING] CNN 모델 없음(pending): {folder}")
             continue
         try:
-            # 모델 파일이 있을 때만 torch를 메모리에 올린다 (2026-09 경량화)
+            # 모델 파일이 있을 때만 torch를 메모리에 올린다
             import torch
             from step1.model import SmallCNN
             with open(os.path.join(folder, 'config.json'), encoding='utf-8') as fp:
@@ -390,7 +339,6 @@ def _load_models_locked():
             cnn_models[label] = (m, cfg)
             print(f"[OK] CNN 모델 로드 완료: {folder}")
         except Exception as e:
-            # 그 라벨만 pending으로 두고 서버는 그대로 켠다
             print(f"[ERROR] !!!!! CNN 모델 로드 실패, pending 처리: {folder} — {e}")
 
     try:
@@ -407,15 +355,13 @@ def _load_models_locked():
         except Exception as e:
             print(f"[ERROR] Whisper 로드 실패: {e}")
 
-# PRELOAD_MODELS=1이면 서버가 켜지자마자 뒤에서 모델을 불러 둔다 — 안 그러면 첫 사용자가 1단계 마이크 확인에서
-# torch·CNN·Whisper를 다 올릴 때까지(1~3분) 기다린다. 메모리가 넉넉한 플랜(2GB 이상)에서만 켤 것:
-# 무료(512MB)에서 켜면 켜지자마자 메모리 초과로 서버가 꺼진다. 기본은 꺼짐(로컬·무료 그대로).
+# PRELOAD_MODELS=1이면 켜지자마자 뒤에서 모델을 불러 첫 사용자의 1~3분 대기를 없앤다. 메모리 2GB 이상에서만 켠다
 if os.environ.get('PRELOAD_MODELS') == '1':
     threading.Thread(target=load_models, name='preload-models', daemon=True).start()
 
 
 def save_temp_file(file_storage):
-    """Windows 호환 임시 파일 저장"""
+    """업로드한 음성을 임시 폴더에 wav 이름으로 저장한다."""
     tmp_dir = tempfile.gettempdir()
     tmp_path = os.path.join(tmp_dir, f"reborn_audio_{os.getpid()}.wav")
     file_storage.save(tmp_path)
@@ -424,7 +370,7 @@ def save_temp_file(file_storage):
 
 
 def save_temp_video(file_storage):
-    """영상 업로드를 원본 확장자 그대로 임시 저장 (mp4/mov/webm 등)."""
+    """업로드한 영상을 원래 확장자 그대로 임시 저장한다."""
     tmp_dir = tempfile.gettempdir()
     ext = os.path.splitext(file_storage.filename or "")[1].lower() or ".mp4"
     tmp_path = os.path.join(tmp_dir, f"reborn_video_{os.getpid()}{ext}")
@@ -434,10 +380,7 @@ def save_temp_video(file_storage):
 
 
 def ensure_mp4(video_path):
-    """영상을 mp4로 통일한다 — mov/webm 등이 들어오면 ffmpeg으로 변환.
-    이미 mp4면 그대로 반환. 변환 실패(ffmpeg 없음 등) 시에는 원본 경로를 그대로
-    반환하고 분석은 계속 진행한다 (OpenCV가 원본 포맷을 읽을 수 있는 경우가 많음).
-    반환값이 입력과 다르면 호출측에서 변환된 파일도 정리(삭제)해야 한다."""
+    """mp4가 아니면 ffmpeg으로 바꾼 경로를, 실패하면 원본 경로를 돌려준다(바뀐 파일은 부른 쪽이 지운다)."""
     if video_path.lower().endswith(".mp4"):
         return video_path
     mp4_path = os.path.splitext(video_path)[0] + "_converted.mp4"
@@ -454,11 +397,7 @@ def ensure_mp4(video_path):
 
 
 def build_highlight_clip(video_path, segments, max_total_sec=15.0, pad_sec=0.3):
-    """(start, end) 구간들만 앞뒤로 pad_sec씩 여유를 두고 잘라 이어붙인 짧은 하이라이트
-    mp4를 만들어 data URL(base64)로 반환한다. 구간이 없거나 실패하면 None.
-    - 원본 영상을 그대로 다 보여주는 대신, "이 표정/시선이 나온 부분"만 편집해서 보여주기 위함.
-    - max_total_sec: 하이라이트 총 길이 상한 (구간이 너무 많으면 앞에서부터 이만큼만 사용).
-    """
+    """구간들만 잘라 이어 붙인 짧은 mp4를 data URL로 돌려준다(최대 max_total_sec초). 없거나 실패하면 None."""
     if not segments:
         return None
 
@@ -519,8 +458,7 @@ def build_highlight_clip(video_path, segments, max_total_sec=15.0, pad_sec=0.3):
 
 # ── CNN 추론 ─────────────────────────────────────────────────────────
 def predict_cnn(audio_path):
-    """준비된 라벨마다 3초 조각 확률의 최댓값, 조각 수, 조각별 (시작초, 확률) 목록을 구한다. 준비 안 된 라벨은 결과에 없다.
-    음량을 잴 수 없는 조각(조각 단위 음량 맞추기에서 거의 무음)은 건너뛰고, 남는 조각이 없으면 확률 0이다."""
+    """준비된 라벨마다 (3초 조각 확률 최댓값, 조각 수, [(시작초, 확률)])을 구한다. 거의 무음인 조각은 건너뛴다."""
     import torch
     out = {}
     for label, (model, cfg) in cnn_models.items():
@@ -549,6 +487,7 @@ def predict_cnn(audio_path):
 # ── API ──────────────────────────────────────────────────────────────
 @app.route('/api/signup', methods=['POST'])
 def signup():
+    """회원가입. 필수 항목·약관 동의·이메일 중복을 확인한다."""
     data = request.get_json()
     email = data.get('email')
     password = data.get('password')
@@ -581,6 +520,7 @@ def signup():
 
 @app.route('/api/login', methods=['POST'])
 def login():
+    """로그인. 맞으면 7일짜리 토큰을 준다."""
     data = request.get_json()
     email = data.get('email')
     password = data.get('password')
@@ -593,6 +533,7 @@ def login():
 
 
 def _issue_token(user, days):
+    """user_id와 만료일을 담은 JWT를 만든다."""
     return jwt.encode(
         {
             'user_id': user.id,
@@ -604,28 +545,22 @@ def _issue_token(user, days):
 
 
 # ── 로그인 없이 시작하기 (게스트) ─────────────────────────────────────
-# 1·2·3단계 API(하루 대화, 2단계 저장, 면접 기록, 코치 노트 등)는 기록을 사람별로 묶고 AI 호출을 사람별로
-# 제한하려고 로그인을 요구한다. 로그인 없이 시작하게 하려고 그 API들을 하나하나 풀면 기록을 묶을 곳이 없어서,
-# 대신 "이름 없는 계정"을 만들어 토큰을 준다 — 이후 흐름은 로그인한 사용자와 똑같이 동작한다.
-# - User 테이블을 그대로 쓴다(컬럼 추가 없음 — 마이그레이션 도구가 없어 기존 DB에 컬럼을 못 붙임).
-#   게스트는 이메일 도메인으로 구분한다. .invalid는 실제로 쓰일 수 없는 예약 도메인(RFC 2606)이라
-#   진짜 메일 주소와 겹치지 않고, 비밀번호는 아무도 모르는 무작위 값이라 이 계정으로 로그인할 수는 없다.
-# - 토큰은 30일 — 게스트는 다시 로그인할 방법이 없어서 토큰이 만료되면 기록을 이어 볼 수 없다.
-#   로그인 토큰(7일)보다 길게 두되, 버려진 토큰이 무기한 살아 있지 않게 기간은 둔다.
-# - 계정이 무한정 만들어지지 않게 IP당 시간당 20개로 제한(같은 와이파이를 쓰는 여러 명은 고려한 값).
+# 이름 없는 계정을 만들어 토큰을 주면 로그인이 필요한 API를 그대로 쓸 수 있다. 이유와 숫자 근거: docs/공통_설계노트.md
+# .invalid는 실제 메일과 겹치지 않는 예약 도메인(RFC 2606)이다
 GUEST_EMAIL_DOMAIN = 'guest.reborn.invalid'
 GUEST_TOKEN_DAYS = 30
 _guest_limiter = RateLimiter(limit=20)
 
 
 def _client_ip():
-    # Render는 프록시 뒤라 실제 접속 IP가 X-Forwarded-For 첫 번째 값으로 온다
+    """접속 IP. Render는 프록시 뒤라 X-Forwarded-For 첫 값을 쓴다."""
     forwarded = request.headers.get('X-Forwarded-For', '')
     return forwarded.split(',')[0].strip() or request.remote_addr or 'unknown'
 
 
 @app.route('/api/guest', methods=['POST'])
 def start_guest():
+    """게스트 계정을 만들고 30일짜리 토큰을 준다(IP당 시간당 20개)."""
     if not _guest_limiter.allow(('guest', _client_ip())):
         return jsonify({'error': '잠시 뒤에 다시 시도해주세요.'}), 429
     user = User(
@@ -639,13 +574,12 @@ def start_guest():
     return jsonify({'token': _issue_token(user, days=GUEST_TOKEN_DAYS), 'name': user.name, 'guest': True}), 201
 
 
-# 웹에서 불러 줄 이름 — 게스트는 "무료로 시작하기" 직후 닉네임 창에서 정한다(회원은 가입할 때 받은 닉네임).
-# User.nickname에 저장해서 다른 기기·새로고침·훈련 끝까지 유지되고, 커뮤니티 작성자 이름에도 그대로 쓰인다.
 NICKNAME_MAX_LEN = 20
 
 
 @app.route('/api/me/nickname', methods=['PUT'])
 def set_nickname():
+    """화면에서 불러 줄 이름을 저장한다(게스트는 시작 직후 정함). 커뮤니티 작성자 이름에도 쓰인다."""
     user = get_current_user()
     if user is None:
         return jsonify({'error': '로그인이 필요합니다'}), 401
@@ -661,6 +595,7 @@ def set_nickname():
 
 @app.route('/health', methods=['GET'])
 def health():
+    """서버 상태와 모델이 불렸는지 알려 준다."""
     return jsonify({
         'status': 'ok',
         'cnn_model_loaded': bool(cnn_models),
@@ -669,14 +604,7 @@ def health():
 
 @app.route('/api/stage1/calibrate', methods=['POST'])
 def stage1_calibrate():
-    """Step1 · 캘리브레이션 (5초 무음 + 10초 낭독 + 1문장 자유발화).
-    점수/오각형 차트에는 반영되지 않음 — /analyze 호출 시 filler/pause 임계값
-    보정용으로만 쓰인다.
-
-    TODO(추후): 현재는 매번 필수로 새로 녹음하게 되어 있음.
-    나중엔 유저별로 최근 캘리브레이션 결과를 DB에 저장해두고
-    "지난번 값 사용하기" 옵션을 주는 방식으로 바꿀 예정.
-    """
+    """1단계 마이크 확인 녹음으로 개인 기준값을 잰다. 점수에는 안 들어가고 /analyze의 채움말·멈춤 기준 보정에만 쓴다."""
     load_models()
 
     if 'file' not in request.files:
@@ -701,7 +629,8 @@ def stage1_calibrate():
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
-    load_models()  # 최초 호출 시에만 실제로 torch/whisper를 로드 (이후엔 즉시 리턴)
+    """녹음 하나로 목소리 5개 점수와 리포트 세부 값을 낸다. 1·2단계 결과는 로그인한 사용자 것만 저장한다."""
+    load_models()
 
     if 'file' not in request.files:
         return jsonify({'error': '파일이 없습니다'}), 400
@@ -712,8 +641,7 @@ def analyze():
     if ext not in allowed:
         return jsonify({'error': f'지원하지 않는 형식: {ext}'}), 400
 
-    # 프론트에서 캘리브레이션 결과를 form-data 'calibration' 필드로 같이 보낸다.
-    # 없으면 기존처럼 이 녹음 자체에서 개인 기준값을 추정 (하위 호환).
+    # 마이크 확인 결과가 없으면 이 녹음 자체에서 개인 기준값을 추정한다
     calibration = None
     calibration_raw = request.form.get('calibration')
     if calibration_raw:
@@ -723,8 +651,7 @@ def analyze():
         except (ValueError, TypeError):
             print("[WARNING] calibration 파싱 실패, 무시하고 진행")
 
-    # 어느 단계의 녹음인지 — 1단계일 때만 Stage1Result로 저장한다(step1/analyze_options.py 참고).
-    # 3단계 면접 대답도 같은 분석으로 리포트의 1→2→3단계 흐름·질문별 말버릇 표시를 채운다.
+    # 3단계 대답도 같은 분석을 쓰지만 저장은 1·2단계만 한다 (step1/analyze_options.py)
     from step1.analyze_options import parse_analyze_stage, saves_stage1_result
     stage = parse_analyze_stage(request.form.get('stage'))
 
@@ -732,8 +659,7 @@ def analyze():
     try:
         tmp_path = save_temp_file(f)
 
-        # 1) CNN (라벨별 모델) → 음성 안정성, 발화 지속성, 발화 에너지
-        # 모델이 없는 라벨은 0이 아니라 None(null) — 0은 '아주 좋음'으로 잘못 읽힌다
+        # 1) CNN → 음성 안정성·발화 지속성·발화 에너지. 모델이 없는 라벨은 None(0은 '아주 좋음'으로 읽힌다)
         cnn_result = predict_cnn(tmp_path)
         cnn_probs, cnn_scores, detected = {}, {}, {}
         for label in CNN_LABELS:
@@ -755,7 +681,7 @@ def analyze():
         pause_result = analyze_pause(tmp_path, calibration=calibration)
         pause_ctrl = pause_result['pause_score']
 
-        # 4) 결과 리포트 화면용 세부 값. 부가 기능이라 실패해도 분석 응답은 그대로 보낸다
+        # 4) 리포트 세부 값. 실패해도 점수 응답은 그대로 보낸다
         report_detail = {}
         try:
             y_report, sr_report = librosa.load(tmp_path, sr=16000, mono=True)
@@ -768,11 +694,8 @@ def analyze():
             import traceback
             print(f"[WARNING] report_detail 생성 실패: {traceback.format_exc()}")
 
-        # 로그인한 유저의 결과만 저장 (3단계 난이도 산정용). 로그인 없이도 분석 자체는
-        # 되게 두고, 저장이 실패해도 분석 응답은 정상 반환한다 — 저장은 부가 기능.
-        # CNN 세 모델이 모두 준비됐을 때만 저장한다 (빈 점수는 저장할 수 없고 난이도를 왜곡한다).
+        # CNN 세 모델이 다 있을 때만 저장한다(빈 점수는 난이도를 왜곡). 저장이 실패해도 응답은 보낸다
         user = get_current_user()
-        # 1단계는 Stage1Result, 2단계 통화 목소리는 Stage2VoiceResult(불안도용), 3단계 대답은 저장하지 않는다.
         if stage in (1, 2) and user is not None and len(cnn_models) == len(CNN_LABELS):
             try:
                 scores_to_save = {
@@ -831,8 +754,7 @@ def analyze():
             'tremor_detail':  report_detail.get('tremor_detail'),
             'cnn_window_count': window_count,
             'demo_mode': not cnn_models,
-            # Whisper가 받아쓴 단어와 녹음 안 시각 — 3단계 리포트의 질문별 말버릇·멈춤 표시를 실제 위치에 놓는 데 쓴다.
-            # 대답 내용이라 민감정보: 응답으로만 돌려주고 로그·DB에는 남기지 않는다.
+            # 받아쓴 단어와 시각(리포트 표시용). 대답 내용이라 응답으로만 돌려주고 로그·DB에는 남기지 않는다
             'words': [{'text': w['text'], 'start': round(w['start'], 2), 'end': round(w['end'], 2)}
                       for w in filler_result.get('words', [])],
         })
@@ -851,9 +773,7 @@ def analyze():
 
 @app.route('/analyze/stage1/latest', methods=['GET'])
 def get_latest_stage1():
-    """로그인한 유저의 가장 최근 1단계(음성) 결과 — 이미 저장된 값만 조회.
-    3단계(모의면접) 난이도 산정(combineAnxietyScore의 stage1Avg)과 ai-agent의 이력
-    조회에서 쓴다. /analyze/stage2/latest와 같은 shape(`{'result': ... | None}`)."""
+    """내 가장 최근 1단계 결과를 {'result': ... | None}으로 돌려준다."""
     user = get_current_user()
     if user is None:
         return jsonify({'error': '로그인이 필요합니다'}), 401
@@ -867,12 +787,10 @@ def get_latest_stage1():
     return jsonify({'result': row.to_entry() if row else None})
 
 
-# ▼▼▼ [추가] Step2 시선/깜빡임 분석 라우트 ▼▼▼
 @app.route('/analyze/gaze-blink', methods=['POST'])
 def analyze_gaze_blink():
-    # mediapipe/cv2는 이 라우트에서만 필요해서 여기서 지연 import (모듈 상단 import를
-    # 뺀 이유는 파일 상단 주석 참고) — /health·로그인·커뮤니티 라우트만 받는 워커는
-    # 이 라우트가 한 번도 안 불리면 mediapipe/cv2를 아예 메모리에 안 올린다.
+    """2단계 업로드 영상으로 깜빡임·시선·표정을 분석해 저장하고, 지표별 하이라이트 영상과 직전 기록을 준다."""
+    # mediapipe·cv2는 여기서만 불러온다
     from step2.landmark_face_points import (
         extract_landmarks_from_video, LEFT_EYE_EAR_IDX, RIGHT_EYE_EAR_IDX,
         POSE_LANDMARK_IDX, LEFT_IRIS_IDX, RIGHT_IRIS_IDX,
@@ -893,12 +811,12 @@ def analyze_gaze_blink():
         tmp_path = save_temp_video(video_file)
         analysis_path = ensure_mp4(tmp_path)
         if analysis_path != tmp_path:
-            converted_path = analysis_path  # mov/webm -> mp4 변환 결과, 별도 정리 필요
+            converted_path = analysis_path
 
         frames = extract_landmarks_from_video(analysis_path)
         duration_sec = frames[-1]["t"] if frames else 0
 
-        # 앞 5초를 캘리브레이션(개인별 기준값) 구간으로 사용
+        # 앞 5초를 개인 기준값 구간으로 쓴다
         calib_frames = [f for f in frames if f["t"] <= 5.0]
         baseline_ear = calibrate_baseline_ear(calib_frames, LEFT_EYE_EAR_IDX, RIGHT_EYE_EAR_IDX)
         baseline_yaw, baseline_pitch = calibrate_baseline_gaze(
@@ -906,8 +824,7 @@ def analyze_gaze_blink():
             LEFT_EYE_EAR_IDX, RIGHT_EYE_EAR_IDX,
         )
 
-        # 눈 깜빡임 — blendshape(신경망 학습 신호)가 있으면 그걸 우선 쓰고,
-        # 없는 영상(구버전 모델 등)이면 EAR 기하학 계산으로 폴백
+        # 깜빡임: blendshape 값이 있으면 그것을, 없으면 눈 비율(EAR)로 계산한다
         blink_series = compute_blink_blendshape_series(frames)
         if any(score is not None for _, score in blink_series):
             blinks = detect_blinks_from_blendshape(blink_series)
@@ -916,7 +833,6 @@ def analyze_gaze_blink():
             blinks = detect_blinks(ear_series, baseline_ear)
         blink_result = score_blink_rate(len(blinks), duration_sec)
 
-        # 시선 고정
         gaze_segments = detect_gaze_segments(
             frames, POSE_LANDMARK_IDX, LEFT_IRIS_IDX, RIGHT_IRIS_IDX,
             LEFT_EYE_EAR_IDX, RIGHT_EYE_EAR_IDX,
@@ -924,7 +840,6 @@ def analyze_gaze_blink():
         )
         gaze_result = score_gaze_segments(gaze_segments)
 
-        # 표정 (미소/긴장)
         expression_series = compute_expression_series(frames)
         expression_summary = summarize_expression(expression_series)
         expression_result = score_expression(
@@ -932,8 +847,7 @@ def analyze_gaze_blink():
         )
         expression_segments = detect_expression_segments(expression_series)
 
-        # 이번 결과를 저장하고, 비교에 쓸 "직전 기록"을 먼저 가져온다 (저장 전에 조회해야
-        # 방금 넣은 레코드 자신이 previous로 잡히지 않는다).
+        # 저장 전에 직전 기록을 먼저 읽어야 방금 넣은 기록이 previous로 잡히지 않는다
         previous_row = (
             Stage2Result.query
             .filter_by(user_id=user.id)
@@ -956,8 +870,7 @@ def analyze_gaze_blink():
         ))
         db.session.commit()
 
-        # 지표별 하이라이트 클립 — 원본을 통째로 보여주는 대신, 해당 순간만 편집한 짧은 영상.
-        # 시선/표정은 "눈에 띄는" 쪽(회피/미소·긴장)만, 깜빡임은 이벤트 전부를 재료로 쓴다.
+        # 하이라이트: 시선은 피한 순간, 표정은 미소·긴장, 깜빡임은 전부
         blink_highlight = build_highlight_clip(
             analysis_path, [(e["start"], e["end"]) for e in blinks]
         )
@@ -994,10 +907,7 @@ def analyze_gaze_blink():
 
 @app.route('/analyze/gaze-blink/live', methods=['POST'])
 def save_live_gaze_blink():
-    """2단계 "실시간 촬영" 결과 저장. 영상은 서버로 오지 않고 브라우저(MediaPipe)가 계산한
-    숫자 요약만 JSON으로 받는다. 업로드 모드(/analyze/gaze-blink)와 같은 Stage2Result에
-    쌓아서, 3단계 난이도(/latest)·"지난번 대비" 비교·ai-agent 이력이 두 모드를 구분 없이
-    하나의 이력으로 본다. 응답의 previous는 /analyze/gaze-blink와 같은 의미(저장 직전 기록)."""
+    """2단계 실시간 통화 결과 저장. 영상 없이 브라우저가 계산한 숫자만 받아 업로드와 같은 표에 쌓는다."""
     user = get_current_user()
     if user is None:
         return jsonify({'error': '로그인이 필요합니다'}), 401
@@ -1007,7 +917,7 @@ def save_live_gaze_blink():
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
-    # 저장 전에 직전 기록을 먼저 조회 (방금 넣은 레코드가 previous로 잡히지 않게)
+    # 저장 전에 직전 기록을 먼저 읽는다
     previous_row = (
         Stage2Result.query
         .filter_by(user_id=user.id)
@@ -1034,11 +944,7 @@ def save_live_gaze_blink():
 
 @app.route('/analyze/stage2/latest', methods=['GET'])
 def get_latest_stage2():
-    """로그인한 유저의 가장 최근 2단계(표정·시선) 결과 — 새로 영상을 분석하지 않고
-    이미 저장된 값만 조회. 업로드(/analyze/gaze-blink)·실시간(/analyze/gaze-blink/live)
-    두 모드 결과가 같은 Stage2Result에 쌓이므로 구분 없이 가장 최근 것을 돌려준다.
-    3단계(모의면접) 난이도 산정과 ai-agent 이력 조회에서 쓴다. 1단계의
-    /analyze/stage1/latest와 같은 shape(`{'result': ... | None}`)."""
+    """내 가장 최근 2단계 결과(업로드·실시간 구분 없음)를 {'result': ... | None}으로 돌려준다."""
     user = get_current_user()
     if user is None:
         return jsonify({'error': '로그인이 필요합니다'}), 401
@@ -1065,13 +971,11 @@ def get_latest_stage2():
             'overallScore': overall_score,
         }
     })
-# ▲▲▲ [추가 끝] ▲▲▲
 
 
 @app.route('/interview/anxiety', methods=['GET'])
 def get_anxiety():
-    """1·2단계 최신 결과로 불안도와 3단계 난이도를 낸다(step3/anxiety.py). 사용자 화면에는 난이도만 쓴다.
-    결과가 없는 단계의 항목은 빠지고, 둘 다 없으면 score는 None, 난이도는 가장 쉬운 warmup."""
+    """1·2단계 최신 결과로 불안도와 3단계 난이도를 낸다. 기록이 없으면 score None, 난이도 warmup."""
     user = get_current_user()
     if user is None:
         return jsonify({'error': '로그인이 필요합니다'}), 401
@@ -1082,7 +986,7 @@ def get_anxiety():
     items = {}
     voice = [r for r in (s1, v2) if r]
     if voice:
-        # 목소리 5개는 1·2단계 통화 중 더 긴장한 쪽 값을 쓴다(step3/anxiety.py worse)
+        # 목소리 5개는 1·2단계 중 더 긴장한 쪽 값을 쓴다
         cols = dict(pause='pause_ctrl', filler='fluency', prolong='continuity', energy='calm', tremor='stability')
         items.update({k: anxiety_worse(*(getattr(r, c) for r in voice)) for k, c in cols.items()})
     if s2:
@@ -1093,7 +997,7 @@ def get_anxiety():
 
 @app.route('/community/posts', methods=['GET'])
 def list_posts():
-    """'이야기' 게시판 · 전체 글 목록 (최신순). 로그인 안 해도 볼 수 있음."""
+    """게시판 글 목록(최신순). 로그인 없이 볼 수 있다."""
     current_user = get_current_user()
     posts = Post.query.order_by(Post.created_at.desc()).all()
     result = []
@@ -1105,7 +1009,7 @@ def list_posts():
 
 @app.route('/community/posts', methods=['POST'])
 def create_post():
-    """'이야기' 게시판 · 글쓰기. 로그인 필요."""
+    """게시판 글쓰기. 로그인이 필요하다."""
     user = get_current_user()
     if not user:
         return jsonify({'error': '로그인이 필요합니다.'}), 401
@@ -1124,7 +1028,7 @@ def create_post():
 
 @app.route('/community/posts/<int:post_id>', methods=['GET'])
 def get_post(post_id):
-    """'이야기' 게시판 · 글 상세 + 댓글 목록."""
+    """게시판 글 하나와 댓글 목록."""
     current_user = get_current_user()
     post = Post.query.get(post_id)
     if not post:
@@ -1138,7 +1042,7 @@ def get_post(post_id):
 
 @app.route('/community/posts/<int:post_id>', methods=['DELETE'])
 def delete_post(post_id):
-    """'이야기' 게시판 · 글 삭제. 본인 글만 가능."""
+    """게시판 글 삭제(댓글 포함). 본인 글만."""
     user = get_current_user()
     if not user:
         return jsonify({'error': '로그인이 필요합니다.'}), 401
@@ -1157,7 +1061,7 @@ def delete_post(post_id):
 
 @app.route('/community/posts/<int:post_id>/comments', methods=['POST'])
 def create_comment(post_id):
-    """'이야기' 게시판 · 댓글 작성. 로그인 필요."""
+    """댓글 쓰기. 로그인이 필요하다."""
     user = get_current_user()
     if not user:
         return jsonify({'error': '로그인이 필요합니다.'}), 401
@@ -1179,7 +1083,7 @@ def create_comment(post_id):
 
 @app.route('/analyze/feedback', methods=['POST'])
 def analyze_feedback():
-    """Step 1 · LLM 코칭 피드백 — /analyze 결과(JSON)를 받아 한 문단 생성."""
+    """1단계 코칭 한 문단. /analyze 결과를 받아 AI로 쓰고, 못 쓰면 source가 template이다."""
     result = request.get_json(silent=True)
     if not result or 'scores' not in result:
         return jsonify({'error': 'scores가 필요합니다'}), 400
@@ -1188,9 +1092,7 @@ def analyze_feedback():
 
 
 def _load_score_profile(user):
-    """로그인한 유저의 최신 1·2단계 세부 점수 → 질문 방식 조절용 profile (step3.interview_question).
-    비로그인이거나 기록이 없거나 DB 조회가 실패하면 해당 부분은 None — 질문 생성이 이것 때문에
-    실패하면 안 되므로 예외는 삼키고 로그만 남긴다 (profile 없이도 질문은 정상 생성됨)."""
+    """최신 1·2단계 세부 점수(질문 방식 조절용). 없거나 조회가 실패하면 None — 질문 생성은 그래도 된다."""
     if user is None:
         return None
     try:
@@ -1213,9 +1115,7 @@ def _load_score_profile(user):
 
 
 def _load_past_questions(user):
-    """로그인한 유저가 지난 면접들에서 받은 "기본 질문"(최근 순) — 이번 면접에서 겹치지 않게 하려고 질문
-    생성에 넘긴다. 꼬리질문과 답변 내용은 넘기지 않는다(질문 문장만). 비로그인이거나 조회가 실패하면
-    빈 목록 — 질문 생성이 이 부가 기능 때문에 실패하면 안 된다."""
+    """지난 면접의 기본 질문 문장(최근 순) — 이번 질문이 겹치지 않게. 없거나 실패하면 빈 목록."""
     if user is None:
         return []
     try:
@@ -1235,17 +1135,8 @@ def _load_past_questions(user):
 
 @app.route('/interview/next-question', methods=['POST'])
 def interview_next_question():
-    """Step 3 · 다음 면접 질문 생성.
-    body: {
-      "tier": "warmup" | "standard" | "practice",
-      "mode": "main" | "follow_up" (선택, 기본 main),
-      "previous_questions": [str, ...],
-      "previous_answer": str (선택 — 유저가 확인·수정한 방금 답변 텍스트),
-      "about_me": [str, ...] (선택 — 하루가 정리하고 유저가 확인한 자기 이야기, "항목: 내용" 형식)
-    }
-    로그인(Authorization 헤더)이 있으면 그 유저의 최신 1·2단계 세부 점수로 질문 방식을 조절하고,
-    지난 면접에서 했던 기본 질문과 겹치지 않게 한다 (선택 — 비로그인이거나 기록이 없으면 tier만으로 생성).
-    """
+    """3단계 다음 질문(기본 또는 꼬리). 로그인했으면 1·2단계 점수와 지난 질문도 반영한다.
+    body: {tier, mode?, previous_questions, previous_answer?, about_me?}"""
     data = request.get_json(silent=True) or {}
     tier = data.get('tier', 'standard')
     mode = data.get('mode', 'main')
@@ -1259,7 +1150,7 @@ def interview_next_question():
 
     user = get_current_user()
     profile = _load_score_profile(user)
-    past_questions = _load_past_questions(user) if mode == 'main' else []  # 꼬리질문엔 불필요
+    past_questions = _load_past_questions(user) if mode == 'main' else []
     about_me = clean_about_me(data.get('about_me'))
     question, source = generate_question(
         tier, previous_questions, previous_answer, mode, profile=profile, past_questions=past_questions,
@@ -1269,14 +1160,13 @@ def interview_next_question():
 
 
 def _own_interview_session(user, session_id):
-    """로그인한 유저 본인의 면접 세션. 없거나 남의 것이면 None — 남의 세션 존재 여부도 숨기려고
-    403이 아니라 같은 404로 처리한다."""
+    """본인 면접만 돌려준다. 남의 것도 None(404)이라 존재 여부가 드러나지 않는다."""
     return InterviewSession.query.filter_by(id=session_id, user_id=user.id).first()
 
 
 @app.route('/interview/sessions', methods=['POST'])
 def start_interview_session():
-    """면접 시작 — 세션을 만들고 id를 돌려준다. body: { "tier": "warmup" | "standard" | "practice" }"""
+    """면접 시작 — 세션을 만들고 id를 돌려준다. body: {tier}"""
     user = get_current_user()
     if user is None:
         return jsonify({'error': '로그인이 필요합니다'}), 401
@@ -1293,8 +1183,7 @@ def start_interview_session():
 
 @app.route('/interview/sessions', methods=['GET'])
 def list_interview_sessions():
-    """내 면접 목록(최신순, 최대 20개) — 대시보드 완료 표시·결과 화면·ai-agent용. 질문/답변 본문은
-    빼고 요약만(상세는 /interview/sessions/<id>)."""
+    """내 면접 요약 목록(최신순 20개). 본문은 /interview/sessions/<id>에서."""
     user = get_current_user()
     if user is None:
         return jsonify({'error': '로그인이 필요합니다'}), 401
@@ -1334,8 +1223,7 @@ def delete_interview_session(session_id):
 
 @app.route('/interview/sessions/<int:session_id>/turns', methods=['POST'])
 def add_interview_turn(session_id):
-    """질문이 화면에 나올 때 호출 — 질문을 저장하고 turn id를 돌려준다.
-    body: { "kind": "main" | "follow_up", "question": str }"""
+    """질문이 화면에 나올 때 저장하고 turn id를 돌려준다. body: {kind, question}"""
     user = get_current_user()
     if user is None:
         return jsonify({'error': '로그인이 필요합니다'}), 401
@@ -1359,7 +1247,7 @@ def add_interview_turn(session_id):
 
 @app.route('/interview/sessions/<int:session_id>/turns/<int:turn_id>/answer', methods=['PUT'])
 def save_interview_answer(session_id, turn_id):
-    """답변이 확정됐을 때 호출 — 답변 텍스트 저장(다시 호출하면 덮어씀). body: { "answer": str }"""
+    """확정된 대답 글을 저장한다(다시 부르면 덮어씀). body: {answer}"""
     user = get_current_user()
     if user is None:
         return jsonify({'error': '로그인이 필요합니다'}), 401
@@ -1382,7 +1270,7 @@ def save_interview_answer(session_id, turn_id):
 
 @app.route('/interview/sessions/<int:session_id>/complete', methods=['POST'])
 def complete_interview_session(session_id):
-    """면접을 끝까지 마쳤을 때 호출 — 완료 시각 기록. 여러 번 불러도 처음 시각을 유지한다(멱등)."""
+    """면접 완료 시각을 남긴다. 여러 번 불러도 처음 시각을 유지한다."""
     user = get_current_user()
     if user is None:
         return jsonify({'error': '로그인이 필요합니다'}), 401
@@ -1396,8 +1284,7 @@ def complete_interview_session(session_id):
 
 
 def _build_coach_facts(user, session):
-    """코치 에이전트가 볼 사실들을 이 면접의 주인(user) 것만 모아 만든다 (coach/schema.py의 facts 형태).
-    에이전트 도구는 user_id를 인자로 받지 않고 이 facts만 들여다보므로, 다른 사용자 데이터는 구조적으로 못 본다."""
+    """코치 에이전트가 볼 facts를 이 사용자 것만으로 만든다 — 도구가 이것만 보므로 남의 기록은 못 본다."""
     turns = [{'kind': t.kind, 'question': t.question, 'answer': t.answer or ''} for t in session.turns]
     previous = (
         InterviewSession.query
@@ -1422,9 +1309,7 @@ def _build_coach_facts(user, session):
 
 @app.route('/interview/sessions/<int:session_id>/coach-note', methods=['POST'])
 def get_or_create_coach_note(session_id):
-    """면접 직후 코치 노트. 이미 만들어 둔 게 있으면 그대로 돌려주고(AI를 다시 부르지 않음), 없으면 에이전트가
-    만들어 저장한다. 에이전트는 항상 완성된 노트를 주므로(AI 실패 시 대체 노트) 이 API는 로그인·소유 확인
-    외에는 실패하지 않는다. 응답: { "note": {...}, "source": "llm" | "fallback" | "care" }"""
+    """면접 직후 코치 노트. 저장된 게 있으면 그대로, 없으면 만들어 저장한다. 응답: {note, source}"""
     user = get_current_user()
     if user is None:
         return jsonify({'error': '로그인이 필요합니다'}), 401
@@ -1458,9 +1343,8 @@ def get_or_create_coach_note(session_id):
 
 @app.route('/interview/sessions/<int:session_id>/report-coach', methods=['POST'])
 def get_or_create_report_coach(session_id):
-    """리포트 3·4번 칸 AI. 이미 만든 게 있으면 그대로 돌려주고, 없으면 만들어 저장한다.
-    body: { "turns": [{"question", "fillers", "pauses"}], "candidates": [{"key", "line"}] }
-    응답: { "result": {picked, rewrites, plan, care}, "source": "llm" | "fallback" | "care" }"""
+    """리포트 3·4번 칸. 저장된 게 있으면 그대로, 없으면 만들어 저장한다.
+    body: {turns: [{question, fillers, pauses}], candidates: [{key, line}]} · 응답: {result, source}"""
     user = get_current_user()
     if user is None:
         return jsonify({'error': '로그인이 필요합니다'}), 401
@@ -1493,16 +1377,14 @@ def get_or_create_report_coach(session_id):
     return jsonify({'result': result, 'source': source})
 
 
-# 연습 힌트 요청 제한 — 요청마다 AI 비용이 들어서 사용자당 시간당 횟수를 막는다 (coach/practice.py 참고)
+# 요청마다 AI 비용이 들어 사용자당 시간당 횟수를 막는다
 _practice_limiter = RateLimiter()
 
 
 @app.route('/interview/practice-hint', methods=['POST'])
 def get_practice_hint():
-    """맞춤 연습 화면의 힌트: 방금 면접의 질문 하나를 다시 답할 때 쓸 '시작 문장 틀'과 '말하는 순서'.
-    body: { "question": str, "previous_answer": str (선택 — 이전 답변이 있으면 그걸 바탕으로 맞춤 힌트) }
-    응답: { "hint": {"opening": str, "steps": [str, ...]}, "source": "llm" | "fallback" }
-    AI를 못 쓰면 일반 힌트를 주므로 로그인·형식·횟수 제한 외에는 실패하지 않는다."""
+    """맞춤 연습 힌트(시작 문장 틀·말하는 순서). AI를 못 쓰면 일반 힌트.
+    body: {question, previous_answer?} · 응답: {hint: {opening, steps}, source}"""
     user = get_current_user()
     if user is None:
         return jsonify({'error': '로그인이 필요합니다'}), 401
@@ -1517,17 +1399,14 @@ def get_practice_hint():
     return jsonify({'hint': hint, 'source': source})
 
 
-# 하루 대화는 대답마다 AI를 부르므로(1·2단계 합쳐 8번 안팎) 연습 힌트보다 넉넉하게 잡되, 연타·악용은 막는다.
+# 하루 대화는 대답마다 AI를 불러(1·2단계 합쳐 8번 안팎) 넉넉하게 잡되 연타는 막는다
 _haru_limiter = RateLimiter(limit=120)
 
 
 @app.route('/haru/reply', methods=['POST'])
 def haru_reply():
-    """1·2단계 하루 대화: 방금 대답에 한 문장 반응 + 다음 질문으로 잇는 말 (경량 웹 /reply를 옮긴 것).
-    body: { "question": str, "answer": str, "next": str|null, "retried": bool, "index": int,
-            "history": [{"ai": bool, "text": str}, ...] }
-    응답: { "say": str, "retry": bool, "source": "llm" | "fallback" | "care" }
-    AI를 못 쓰면 정해 둔 공감 문장 + 다음 질문을 주므로 로그인·형식·횟수 제한 외에는 실패하지 않는다."""
+    """하루 대화: 방금 대답에 한 문장 반응하고 다음 질문으로 잇는다. AI를 못 쓰면 정해 둔 공감 문장.
+    body: {question, answer, next, retried, index, history} · 응답: {say, retry, source}"""
     user = get_current_user()
     if user is None:
         return jsonify({'error': '로그인이 필요합니다'}), 401
@@ -1543,10 +1422,8 @@ def haru_reply():
 
 @app.route('/haru/profile', methods=['POST'])
 def haru_profile():
-    """"하루가 이렇게 이해했어요" 카드: 1·2단계 대답을 항목별로 짧게 정리.
-    body: { "items": [{"label": str, "question": str, "answer": str}, ...] }
-    응답: { "items": [{"label": str, "value": str}, ...], "source": "llm" | "fallback" | "care" }
-    AI를 못 쓰면 대답 앞부분을 그대로 준다(사용자가 카드에서 고침). 결과는 서버에 저장하지 않는다."""
+    """'하루가 이렇게 이해했어요' 카드: 대답을 항목별로 짧게 정리한다(저장하지 않음).
+    body: {items: [{label, question, answer}]} · 응답: {items: [{label, value}], source}"""
     user = get_current_user()
     if user is None:
         return jsonify({'error': '로그인이 필요합니다'}), 401
@@ -1562,13 +1439,10 @@ def haru_profile():
 
 @app.route('/interview/tts', methods=['POST'])
 def interview_tts():
-    """Step 3 · 질문 텍스트 → mp3 음성.
-    body: { "text": "...", "tier": "warmup" | "standard" | "practice" | "haru" (선택, 없으면 standard) }
-    "haru"는 1·2단계 대화 상대 하루의 목소리.
-    """
+    """문장을 mp3로 읽어 준다. tier로 면접관 목소리를, "haru"면 하루 목소리를 고른다. body: {text, tier?}"""
     data = request.get_json(silent=True) or {}
     text = data.get('text', '').strip()
-    tier = data.get('tier')  # 면접관별 음성 선택용
+    tier = data.get('tier')
     if not text:
         return jsonify({'error': 'text가 필요합니다'}), 400
 
@@ -1581,16 +1455,14 @@ def interview_tts():
 
 @app.route('/interview/transcribe', methods=['POST'])
 def interview_transcribe():
-    """Step 3 · 답변 영상 → 텍스트 변환 (Whisper 재사용).
-    꼬리질문 생성에 쓸 '방금 사용자가 뭐라고 답했는지'를 얻기 위함.
-    """
-    load_models()  # 최초 호출 시에만 실제로 torch/whisper를 로드 (이후엔 즉시 리턴)
+    """3단계 대답 영상을 Whisper로 받아쓴다(꼬리질문 재료). Whisper가 없으면 빈 글로 답한다."""
+    load_models()
 
     if 'file' not in request.files:
         return jsonify({'error': '파일이 없습니다'}), 400
 
     if not (WHISPER_AVAILABLE and whisper_model is not None):
-        # whisper 없는 환경 — 에러 대신 빈 텍스트로 응답 (꼬리질문 없이 진행되게)
+        # 에러 대신 빈 글로 답해 꼬리질문 없이 진행되게 한다
         return jsonify({'text': '', 'available': False})
 
     video_file = request.files['file']
@@ -1603,7 +1475,7 @@ def interview_transcribe():
             converted_path = analysis_path
 
         y16, _ = librosa.load(analysis_path, sr=16000, mono=True)
-        # Whisper는 한 번에 한 요청만(단어 시각을 재는 다른 요청과 겹치면 그쪽이 깨짐 — step1/whisper_guard.py)
+        # Whisper는 한 번에 한 요청만 쓴다(겹치면 단어 시각이 깨짐 — step1/whisper_guard.py)
         from step1.whisper_guard import transcribe as guarded_transcribe
         result = guarded_transcribe(whisper_model, y16, language="ko")
         text = result.get("text", "").strip()
@@ -1625,5 +1497,5 @@ def interview_transcribe():
 
 
 if __name__ == '__main__':
-    load_models()  # db.create_all()은 이제 모듈 로드 시점에 이미 실행됨
+    load_models()
     app.run(host='0.0.0.0', port=5000, debug=True)

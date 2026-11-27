@@ -1,9 +1,5 @@
-"""
-맞춤 연습 — 방금 면접에서 "한 번 더 해볼 만한 질문"을 고르고, 그 질문을 다시 답하는 데 도움이 되는 힌트를 만든다.
-
-원칙은 코치 노트와 같다: 무엇을 연습할지(질문 고르기)는 코드가 정하고, AI는 힌트 문구만 쓰며, AI 출력은 전부
-검증하고, 실패하면 일반 힌트로 대체한다. 힌트는 **답을 대신 써주지 않는다** — 말하는 순서와 시작 문장 틀(빈칸 포함)만
-주고, 사용자의 경험을 AI가 지어내지 못하게 한다.
+"""코치 · 맞춤 연습 — 방금 면접에서 한 번 더 해 볼 질문은 코드가 고르고, AI는 다시 답할 때의 힌트(말하는 순서·빈칸 있는 시작 문장)만 쓴다.
+힌트는 답을 대신 써 주지 않고, AI 출력은 검증해서 실패하면 일반 힌트로 대체한다.
 """
 from __future__ import annotations
 
@@ -31,8 +27,7 @@ RATE_LIMIT_PER_HOUR = 20
 # ── 연습할 질문 고르기 (코드가 정함) ──────────────────────────────────────
 
 def pick_practice_turn(turns: list[dict]) -> int | None:
-    """한 번 더 답해볼 질문의 순번(0부터). 답을 못 남긴 질문이 있으면 그중 첫 번째, 없으면 가장 짧게 답한 질문
-    (동점이면 앞선 것). 질문이 하나도 없으면 None. '못했다'는 평가가 아니라 "한 번 더 해볼 만한" 질문을 고르는 것이다."""
+    """한 번 더 답해 볼 질문의 순번(0부터)을 고른다: 답을 못 남긴 첫 질문, 없으면 가장 짧게 답한 질문. 질문이 없으면 None."""
     if not turns:
         return None
     lengths = [len((t.get("answer") or "").strip()) for t in turns]
@@ -124,6 +119,7 @@ SYSTEM_PROMPT = """당신은 'Re-born'이라는 발화 재활 앱의 코치입�
 
 
 def _parse_json(text: str) -> dict | None:
+    """AI 응답 글에서 첫 '{'부터 마지막 '}'까지를 JSON 객체로 읽는다. 실패하면 None."""
     start, end = text.find("{"), text.rfind("}")
     if start == -1 or end <= start:
         return None
@@ -135,8 +131,7 @@ def _parse_json(text: str) -> dict | None:
 
 
 def generate_hint(question: str, previous_answer: str, client=None) -> tuple[dict, str]:
-    """(힌트, source) 반환. source: 'llm' | 'fallback'. 항상 완성된 힌트를 준다.
-    위기 신호가 있는 질문·답변은 AI로 보내지 않는다. 로그엔 예외 종류만 남긴다(답변은 민감정보)."""
+    """(힌트, 출처 'llm'|'fallback')를 돌려준다. 항상 완성된 힌트이고, 위기 신호가 있으면 AI로 보내지 않는다."""
     if detect_care([question, previous_answer]):
         return fallback_hint(), "fallback"
 
@@ -168,14 +163,15 @@ def generate_hint(question: str, previous_answer: str, client=None) -> tuple[dic
 # ── 호출 제한 ────────────────────────────────────────────────────────────
 
 class RateLimiter:
-    """사용자별 슬라이딩 윈도우 호출 제한 (메모리). 서버가 workers=1이라 프로세스 안에서 충분하고, 재배포하면
-    초기화되지만 비용 폭주를 막는 용도로는 이걸로 충분하다."""
+    """사용자별 호출 횟수 제한(메모리, 슬라이딩 윈도우). 서버가 workers=1이라 비용 폭주를 막기엔 이걸로 충분하다."""
 
     def __init__(self, limit: int = RATE_LIMIT_PER_HOUR, window_sec: float = 3600.0):
+        """window_sec초 안에 limit번까지 허용하는 제한을 만든다."""
         self.limit, self.window = limit, window_sec
         self._hits: dict[object, list[float]] = {}
 
     def allow(self, key, now: float | None = None) -> bool:
+        """이 사용자(key)가 지금 호출해도 되면 True를 돌려주고 한 번으로 센다."""
         now = time.monotonic() if now is None else now
         recent = [t for t in self._hits.get(key, []) if now - t < self.window]
         if len(recent) >= self.limit:
