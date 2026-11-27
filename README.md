@@ -169,6 +169,3 @@ push·PR마다 GitHub Actions(`.github/workflows/ci.yml`)가 문법 검사, ruff
 - Whisper 모델은 빌드 때 미리 받아 두고, `PRELOAD_MODELS=1`로 서버가 켜지자마자 모델을 불러 둔다.
 - `DATABASE_URL`(External Database URL)과 API 키는 Render 대시보드 Environment에서 직접 넣는다. 파일에는 값을 적지 않는다.
 
-## 트러블슈팅 기록
-
-예전에 겪은 버그·오탐·미검출과 해결 과정은 별도 저장소 `re-born-hongik-univ/trouble-shooting`의 `backend/`에 이슈 하나당 파일 하나로 정리돼 있다.
