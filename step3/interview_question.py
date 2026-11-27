@@ -1,14 +1,6 @@
-"""
-Step 3 · 면접 질문 생성 (난이도 tier + 질문 종류 mode 기반).
-
-- 프론트에서 tier(warmup/standard/practice), mode(main/follow_up), 지금까지 나온 질문 목록,
-  방금 답변(previous_answer)을 보내면 다음 질문 1개를 생성해 돌려준다.
-- mode
-  - main: 새 주제의 기본 질문. 방금 답변을 파고들지 않는다.
-  - follow_up: 방금 답변을 바탕으로 한 꼬리질문. tier가 높을수록 더 깊게 파고든다.
-- 첫 질문(자기소개)은 프론트에서 고정으로 보내고, 이 함수는 두 번째 질문부터 사용된다.
-- ANTHROPIC_API_KEY 가 없거나 호출이 실패하면 고정 질문 리스트에서 폴백한다.
-  (백엔드가 죽어도 화면은 안 죽게)
+"""3단계 · 면접 질문 생성 — 난이도(tier)와 질문 종류(기본 main / 꼬리 follow_up)에 맞춰 다음 질문 하나를 만든다.
+첫 질문(자기소개)은 프론트가 고정으로 내고, AI 키가 없거나 실패하면 미리 녹음해 둔 고정 질문으로 대신한다.
+프롬프트 설계 배경: docs/step3_설계노트.md
 """
 from __future__ import annotations
 
@@ -41,8 +33,7 @@ COMMON_RULES = """당신은 'Re-born'이라는 비대면 발화 코칭 앱의 AI
 - 이미 나온 질문과 겹치지 않게 합니다. 자기소개는 첫 질문에서 이미 했으므로 다시 묻지 않습니다.
 - 비꼬거나 공격적인 말투, 답변을 깎아내리는 표현은 난이도와 상관없이 절대 쓰지 않습니다."""
 
-# 난이도별 전체 분위기 (기본 질문·꼬리질문 공통)
-# tier는 1·2단계 결과로 정해짐: 긴장이 많이 보일수록 warmup, 안정적일수록 practice
+# 난이도별 분위기(기본·꼬리질문 공통) — 긴장이 많이 보일수록 warmup, 안정적일수록 practice
 TIER_INSTRUCTIONS = {
     "warmup": (
         "현재 난이도는 워밍업입니다. 아직 말하기에 긴장이 많이 보이는 단계입니다.\n"
@@ -62,7 +53,7 @@ TIER_INSTRUCTIONS = {
     ),
 }
 
-# 꼬리질문을 얼마나 깊게 파고들지 난이도별로 다르게
+# 꼬리질문을 얼마나 깊게 파고들지 난이도별로
 FOLLOW_UP_INSTRUCTIONS = {
     "warmup": (
         "답변에서 좋았던 점을 짧게 짚은 뒤, 부담 없이 조금만 더 이야기해볼 수 있는 가벼운 질문을 합니다."
@@ -78,8 +69,7 @@ FOLLOW_UP_INSTRUCTIONS = {
     ),
 }
 
-# API 실패 시 안전망. 문장은 미리 받아 둔 면접관 mp3와 글자까지 같아야 그 목소리로 나온다
-# (목록: voice-cnn/.scratch/stage3-redesign/lines.md A3·A4, 프론트 prerecorded.ts). 첫 질문(자기소개)은 프론트가 따로 낸다.
+# AI 실패 시 쓰는 고정 질문 — 미리 녹음한 면접관 mp3와 글자까지 같아야 그 목소리로 나온다(프론트 prerecorded.ts)
 FALLBACK_QUESTIONS = {
     "warmup": [
         "요즘 관심 있게 보고 있는 게 있다면 편하게 말씀해 주세요.",
@@ -107,7 +97,7 @@ FALLBACK_QUESTIONS = {
     ],
 }
 
-# 어떤 대답 뒤에도 어울리는 꼬리질문. 한 면접 안에서 겹치지 않게 순서대로 돌려 쓴다(도전은 1→2처럼 이어져도 자연스럽게)
+# 어떤 대답 뒤에도 어울리는 고정 꼬리질문 — 한 면접 안에서 겹치지 않게 순서대로 쓴다
 FALLBACK_FOLLOW_UPS = {
     "warmup": [
         "방금 이야기 좋았어요. 그 부분을 조금만 더 들려주실 수 있을까요?",
@@ -131,15 +121,8 @@ FALLBACK_FOLLOW_UPS = {
 
 
 # ── 1·2단계 세부 점수 → 질문 방식 조절 ─────────────────────────────────
-# 점수 "숫자"는 LLM에 넘기지 않고, 낮게 나온 항목에 맞는 "질문 방식 지침"만 넘긴다.
-# 숫자나 약점 이름이 프롬프트에 없으면 LLM이 그걸 사용자에게 말해버릴 여지가 구조적으로 줄고
-# (발화·사회불안 사용자에게 "채움말이 많으시네요" 같은 말은 상처가 될 수 있음),
-# 프롬프트에도 "절대 언급하지 않는다"는 규칙을 한 번 더 넣는다.
-#
-# 기준: 점수는 모두 0~100, 높을수록 안정적. WEAK_BELOW 미만이면 "약한 항목"으로 보는데,
-# 70은 프론트 getTier()가 "실전 난이도(안정적)"로 넘어가는 경계와 같은 값이라 의미를 맞춘 것.
-# 정확도 검증으로 정한 임계값이 아니라 난이도 경계를 재사용한 휴리스틱이므로, 바꿀 땐 실제
-# 사용자 질문을 보고 조정할 것. 항목이 많이 약해도 질문이 과해지지 않게 가장 낮은 2개만 반영.
+# 점수 숫자는 AI에 넘기지 않고, 낮게 나온 항목에 맞는 "질문 방식 지침"만 넘긴다(이유: 설계노트)
+# 70 미만을 약한 항목으로 보고(잠정 기준), 질문이 과해지지 않게 가장 낮은 2개만 반영한다
 WEAK_BELOW = 70
 MAX_WEAK_AXES = 2
 
@@ -165,7 +148,7 @@ _AXIS_GUIDANCE = {
         "말의 힘이 오르내리기 쉬운 편",
         "편안하게 이야기하듯 답할 수 있는 질문을 합니다.",
     ),
-    # 표정·시선은 질문 내용으로 바꿀 수 있는 게 거의 없어서, 어투와 부담을 낮추는 정도로만 반영
+    # 표정·시선은 질문 내용으로 바꿀 게 거의 없어 어투와 부담만 낮춘다
     "blink": (
         "긴장이 눈 깜빡임에 드러나기 쉬운 편",
         "질문을 짧고 친근한 어투로, 압박 없이 던집니다.",
@@ -182,11 +165,7 @@ _AXIS_GUIDANCE = {
 
 
 def _weak_axes(profile: dict | None) -> list[str]:
-    """profile에서 WEAK_BELOW 미만인 항목을 낮은 점수 순으로 최대 MAX_WEAK_AXES개.
-
-    profile 형태: {"stage1": {축: 점수, ...} | None, "stage2": {축: 점수, ...} | None}
-    (알 수 없는 키·숫자가 아닌 값은 무시 — 서버 DB 값이라 신뢰하지만 프롬프트가 깨지면 안 됨)
-    """
+    """{"stage1": {축: 점수}, "stage2": {...}}에서 70 미만 항목을 낮은 순으로 최대 2개 돌려준다(이상한 값은 무시)."""
     if not profile:
         return []
     scored: list[tuple[float, str]] = []
@@ -199,7 +178,7 @@ def _weak_axes(profile: dict | None) -> list[str]:
 
 
 def _profile_section(profile: dict | None) -> str:
-    """프롬프트에 붙일 "질문 방식 조절" 섹션. 약한 항목이 없으면 빈 문자열."""
+    """프롬프트에 붙일 "질문 방식 조절" 부분을 만든다. 약한 항목이 없으면 빈 문자열."""
     axes = _weak_axes(profile)
     if not axes:
         return ""
@@ -213,16 +192,12 @@ def _profile_section(profile: dict | None) -> str:
 
 
 # ── 지난 면접과 겹치지 않게 ─────────────────────────────────────────────
-# 같은 사람이 여러 번 연습해도 매번 새로운 질문을 받도록, 지난 면접에서 했던 "기본 질문"을 프롬프트에
-# 넣어 피하게 한다. 꼬리질문은 그때그때 답변에 따라 달라지는 질문이라 대상에서 뺀다(비슷한 꼬리질문이
-# 다시 나오는 건 자연스럽고, 막으면 오히려 답변을 못 파고든다). 답변 내용은 넘기지 않고 질문 문장만 넘긴다.
-# 개수는 프롬프트가 길어지지 않게 최근 것만 — 너무 많이 넘기면 LLM이 피할 주제를 못 찾아 질문이 어색해진다.
+# 여러 번 연습해도 새 질문을 받도록 지난 면접의 기본 질문(꼬리질문·답변은 빼고)을 최근 것만 넘긴다
 MAX_PAST_QUESTIONS = 15
 
 
 def _past_to_avoid(past_questions: list[str] | None, previous_questions: list[str]) -> list[str]:
-    """지난 면접 질문 중 이번 프롬프트에 넣을 것: 이번 면접에서 이미 나온 것(별도 섹션으로 들어감)과
-    자기소개(첫 질문에서 이미 했고 공통 규칙으로 금지)는 빼고, 중복을 없애 최근 순으로 최대 MAX개."""
+    """지난 면접 질문 중 이번에 이미 나온 것과 자기소개를 빼고, 중복 없이 최근 순으로 최대 MAX_PAST_QUESTIONS개."""
     seen = set(previous_questions)
     out: list[str] = []
     for q in past_questions or []:
@@ -236,7 +211,7 @@ def _past_to_avoid(past_questions: list[str] | None, previous_questions: list[st
 
 
 def _past_section(past_questions: list[str] | None, previous_questions: list[str], mode: str) -> str:
-    """프롬프트에 붙일 "지난 면접 질문" 섹션. 기본 질문 차례가 아니거나 피할 질문이 없으면 빈 문자열."""
+    """프롬프트에 붙일 "지난 면접 질문" 부분을 만든다. 기본 질문 차례가 아니거나 피할 질문이 없으면 빈 문자열."""
     if mode != "main":
         return ""
     avoid = _past_to_avoid(past_questions, previous_questions)
@@ -250,15 +225,13 @@ def _past_section(past_questions: list[str] | None, previous_questions: list[str
 
 
 # ── 하루와 나눈 이야기 ──────────────────────────────────────────────────
-# 1·2단계에서 하루(대화 상대)가 정리하고 사용자가 확인·수정한 자기 이야기("하루가 이렇게 이해했어요" 카드).
-# 기본 질문의 소재로만 참고한다 — 낯선 질문보다 자기 이야기로 시작하면 실전 면접의 부담이 줄어서다.
-# 위기 신호가 있으면 AI로 보내지 않는다(coach/safety.py). 개수·길이는 프롬프트가 길어지지 않게 자른다.
+# 1·2단계에서 확인받은 자기 이야기를 기본 질문의 소재로만 쓴다(위기 신호가 있으면 보내지 않음, coach/safety.py)
 MAX_ABOUT_ITEMS = 8
 MAX_ABOUT_LEN = 80
 
 
 def clean_about_me(about_me) -> list[str]:
-    """요청의 about_me(["항목: 내용", ...])를 정리. 형식이 틀리거나 위기 신호가 있으면 빈 목록."""
+    """요청의 about_me(["항목: 내용", ...])를 정리한다. 형식이 틀리거나 위기 신호가 있으면 빈 목록."""
     if not isinstance(about_me, list):
         return []
     out = [" ".join(str(x).split())[:MAX_ABOUT_LEN] for x in about_me if isinstance(x, str) and x.strip()]
@@ -267,7 +240,7 @@ def clean_about_me(about_me) -> list[str]:
 
 
 def _about_section(about_me: list[str] | None, mode: str) -> str:
-    """프롬프트에 붙일 "사용자가 들려준 이야기" 섹션. 기본 질문 차례가 아니거나 내용이 없으면 빈 문자열."""
+    """프롬프트에 붙일 "미리 들려준 자기 이야기" 부분을 만든다. 기본 질문 차례가 아니거나 내용이 없으면 빈 문자열."""
     if mode != "main" or not about_me:
         return ""
     lines = "\n".join(f"- {x}" for x in about_me)
@@ -283,6 +256,7 @@ def _about_section(about_me: list[str] | None, mode: str) -> str:
 def _fallback_question(
     tier: str, previous_questions: list[str], mode: str, past_questions: list[str] | None = None
 ) -> str:
+    """고정 질문 중 이번 면접에서 안 나온 것을 고른다(기본 질문은 지난 면접에도 안 나온 것을 우선)."""
     if mode == "follow_up":
         pool = FALLBACK_FOLLOW_UPS.get(tier, FALLBACK_FOLLOW_UPS["standard"])
         unused = [q for q in pool if q not in previous_questions]
@@ -309,6 +283,7 @@ def _user_prompt(
     past_questions: list[str] | None = None,
     about_me: list[str] | None = None,
 ) -> str:
+    """난이도·이미 나온 질문·참고 정보를 모아 AI에게 보낼 글을 만든다."""
     instr = TIER_INSTRUCTIONS.get(tier, TIER_INSTRUCTIONS["standard"])
     asked = "\n".join(f"- {q}" for q in previous_questions) if previous_questions else "(아직 없음)"
 
@@ -348,14 +323,10 @@ def generate_question(
     past_questions: list[str] | None = None,
     about_me: list[str] | None = None,
 ) -> tuple[str, str]:
-    """(질문, source) 반환. source는 'llm' 또는 'fallback'.
-    profile: 1·2단계 세부 점수(_weak_axes 참고) — 약한 항목에 맞춰 질문 방식만 조절한다.
-    past_questions: 지난 면접의 기본 질문(최근 순) — 겹치지 않는 새 주제로 묻게 한다. 폴백 경로에서는
-    고정 질문 중 지난번에 안 나온 것을 우선 고른다.
-    about_me: 하루와 나눈 이야기(clean_about_me로 정리한 것) — 기본 질문의 소재로 참고한다."""
+    """다음 질문과 출처('llm' 또는 'fallback')를 돌려준다. profile·past_questions·about_me는 질문 방식·주제 참고용."""
     previous_questions = previous_questions or []
 
-    # 꼬리질문인데 답변 텍스트가 없으면(인식 실패 등) 파고들 내용이 없으므로 기본 꼬리질문으로
+    # 꼬리질문인데 대답 글이 없으면(인식 실패 등) 파고들 내용이 없어 고정 꼬리질문으로
     if mode == "follow_up" and not previous_answer:
         return _fallback_question(tier, previous_questions, mode, past_questions), "fallback"
 

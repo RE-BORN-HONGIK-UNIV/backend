@@ -1,27 +1,20 @@
-"""
-Step 3 · 면접 기록(세션·질문·답변) 요청 검증 (순수 함수).
-
-면접 중 질문/답변 텍스트를 서버에 저장하는 API의 입력 검증을 모아둔다. 답변 텍스트는 발화·사회불안
-사용자의 말이라 민감할 수 있으므로, 저장하는 값의 형식·길이를 서버에서 엄격히 제한한다.
-
-app.py에 두지 않은 이유: app.py는 import 시 DB·matplotlib 등이 필요해서 CI의 순수 로직
-테스트에서 불러올 수 없다.
+"""3단계 · 면접 기록 요청 검증 — 면접 중 질문·대답 글을 저장하는 API의 입력 형식과 길이를 엄격히 확인한다(대답은 민감할 수 있어서).
+app.py와 떼어 둔 건 CI 테스트에서 DB 없이 불러오기 위해서다.
 """
 from __future__ import annotations
 
 TIERS = ("warmup", "standard", "practice")
 KINDS = ("main", "follow_up")
 
-# 길이 상한 — 질문은 LLM이 만든 한 문장(여유 있게), 답변은 음성 인식 텍스트(3분 안팎 발화 기준 여유)
+# 길이 상한 — 질문은 AI가 만든 한 문장, 대답은 3분 안팎 음성 인식 글 기준으로 여유 있게
 MAX_QUESTION_LEN = 1000
 MAX_ANSWER_LEN = 5000
-# 한 면접에서 저장할 수 있는 질문 수 상한 — 정상 면접(기본 3개 + 꼬리질문)보다 훨씬 크게 잡아
-# 정상 사용엔 영향 없고, 잘못된 클라이언트가 무한히 쌓는 것만 막는다
+# 한 면접의 질문 수 상한 — 정상 면접보다 훨씬 크게 잡아 잘못된 요청이 무한히 쌓이는 것만 막는다
 MAX_TURNS_PER_SESSION = 30
 
 
 def parse_session_start(data) -> str:
-    """면접 시작 요청 → 검증된 tier. 잘못되면 ValueError(사용자용 메시지)."""
+    """면접 시작 요청에서 tier를 꺼낸다. 잘못되면 ValueError(사용자용 메시지)."""
     if not isinstance(data, dict):
         raise ValueError("요청 본문이 올바르지 않습니다")
     tier = data.get("tier")
@@ -31,7 +24,7 @@ def parse_session_start(data) -> str:
 
 
 def parse_turn(data) -> tuple[str, str]:
-    """질문 저장 요청 → (kind, question)."""
+    """질문 저장 요청에서 (kind, question)을 꺼낸다."""
     if not isinstance(data, dict):
         raise ValueError("요청 본문이 올바르지 않습니다")
     kind = data.get("kind")
@@ -47,7 +40,7 @@ def parse_turn(data) -> tuple[str, str]:
 
 
 def parse_answer(data) -> str:
-    """답변 저장 요청 → 답변 텍스트. 음성 인식이 실패한 빈 답변("")도 허용한다(답변을 건너뛴 기록)."""
+    """대답 저장 요청에서 대답 글을 꺼낸다. 인식이 실패한 빈 대답("")도 건너뛴 기록으로 받는다."""
     if not isinstance(data, dict):
         raise ValueError("요청 본문이 올바르지 않습니다")
     answer = data.get("answer")
