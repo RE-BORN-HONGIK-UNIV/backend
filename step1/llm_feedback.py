@@ -1,10 +1,5 @@
-"""
-Step 1 · LLM 기반 발화 코칭 피드백 생성.
-
-- /analyze 결과(점수 dict)를 받아 공감형 코칭 문구 한 문단을 생성한다.
-- ANTHROPIC_API_KEY 가 없거나 호출이 실패하면 None 을 반환한다.
-  → 호출측(app.py /analyze/feedback)이 기존 템플릿 문구로 폴백한다.
-- 오디오/이름/전사문은 넘기지 않는다. 점수와 집계 숫자만 사용.
+"""1단계 · AI 코칭 문구 — 분석 점수로 공감형 코칭 한 문단을 만든다. 키가 없거나 실패하면 None(호출측이 고정 문구로 대신).
+녹음·이름·대답 글은 보내지 않고 점수와 개수만 보낸다.
 """
 from __future__ import annotations
 
@@ -46,6 +41,7 @@ SYSTEM_PROMPT = """당신은 고립·은둔 청년의 발화 재활을 돕는 '�
 
 
 def _user_prompt(result: dict) -> str:
+    """점수와 채움말·멈춤 개수를 AI에게 보낼 글로 만든다."""
     scores = result.get("scores", {})
     fd = result.get("filler_detail", {})
     pd = result.get("pause_detail", {})
@@ -74,7 +70,7 @@ def _user_prompt(result: dict) -> str:
 
 
 def generate_feedback(result: dict, timeout: float = 20.0) -> str | None:
-    """점수 dict → 코칭 문단. 실패 시 None."""
+    """점수 dict로 코칭 문단을 만든다. 실패하면 None."""
     if _client is None:
         return None
     try:

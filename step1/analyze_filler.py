@@ -1,30 +1,6 @@
-# -*- coding: utf-8 -*-
-"""
-채움말(filler) 검출 로직
-
-구성 (3갈래 검출):
-1) 고신뢰 채움말 (어/음/아/에/애) - VERBATIM_PROMPT로 텍스트 복원 유도,
-   독립 소리구간이면 채움말로 확정, 다른 단어와 뭉쳐 있으면 제외(연장으로 간주)
-2) 조건부 채움말 (그/저/뭐/막 등) - Whisper 텍스트 매칭 + 독립 소리구간일 때만 인정
-3) 음향 기반 채움말 후보 - 소리구간에서 Whisper 단어가 설명 못 하는 잔여 구간을
-   ZCR 개인 기준값으로 "채움말성 목소리"인지 판별
-
-점수/오각형 차트에는 1)+2)(텍스트로 확실히 확인된 것)만 반영한다. 3)은
-"acoustic_filler_candidates"로 별도 기록만 하고 점수에서 제외 - 실사용
-테스트에서 채움말 없이 녹음해도 문장 사이 숨소리가 오탐되는 문제가
-반복 확인됐고, ZCR만으로는 채움말/숨소리를 안정적으로 못 가른다는 게
-확인됐기 때문(근거는 /docs/filler_threshold_근거.md 참고). 완전히
-버리진 않는 이유: 캘리브레이션(개인 채움말/숨소리 ZCR 측정)이 계속
-의미를 갖게 하고, 정확도가 개선되면 다시 점수에 편입할 수 있도록
-검출 로직과 기록은 살려둔다.
-
-CNN(prolongation/tremor/energy)은 이미 전체 오디오를 슬라이딩 윈도우로 훑고
-있으므로, 이 파일이 CNN을 직접 호출하거나 구간을 실시간으로 넘기지는 않는다.
-다만 뭉쳐서 채움말 집계에서 제외된 구간(1, 2번에서)은 cnn_prolongation_candidates로
-기록해두어, 나중에 CNN 재학습 결과와 "이 구간을 CNN이 실제로 연장으로
-잡아냈는지" 수동 대조하는 용도로만 쓴다.
-
-각 임계값의 근거(논문/코퍼스 인용)는 /docs/filler_threshold_근거.md 참고.
+"""1단계 · 채움말 검출 — Whisper 단어와 소리 구간으로 "어/음"(고신뢰)·"그/뭐"(조건부) 채움말을 찾아 점수를 낸다.
+음향으로만 찾은 후보와 다른 단어에 붙은 소리(연장 후보)는 점수에 넣지 않고 기록만 한다.
+기준값 근거: docs/filler_threshold_근거.md · 설계 배경: docs/step1_설계노트.md · 문헌: docs/REFERENCES.md
 """
 
 import re
@@ -34,7 +10,7 @@ from step1.whisper_guard import transcribe as _guarded_transcribe
 
 
 # -----------------------------------------------------------------------------
-# 설정값 (잠정치 - 근거는 /docs/filler_threshold_근거.md 참고)
+# 설정값 (잠정치 — 근거: docs/filler_threshold_근거.md)
 # -----------------------------------------------------------------------------
 
 ACOUSTIC_MIN_DUR = 0.12    # 음향 기반 채움말 후보 최소 길이 (짧은 잡음 제거용)
@@ -53,8 +29,7 @@ CONDITIONAL_FILLERS = {"그", "저", "뭐", "막", "좀", "이제", "인제", "�
 # -----------------------------------------------------------------------------
 
 def _normalize_word(word: str) -> str:
-    """Whisper 출력에서 한글만 남긴다. 조사 붙은 단어는 후보 사전과
-    자동으로 안 맞아서 걸러짐(다의어 오탐 1차 방어)."""
+    """Whisper 단어에서 한글만 남긴다(조사가 붙은 단어는 후보 사전과 안 맞아 자연히 걸러진다)."""
     return re.sub(r"[^\uac00-\ud7a3]", "", word).strip()
 
 
@@ -119,8 +94,7 @@ def _overlapping_sound_intervals(word, sound_intervals):
 
 
 def _is_merged_with_other_words(word, words, sound_intervals):
-    """후보 단어가 다른 Whisper 단어와 동일 비무음 구간을 공유하는지 판정.
-    공유하면 다음 단어에 이어붙은 연장(prolongation)으로 보고 채움말에서 제외."""
+    """후보 단어가 다른 단어와 같은 소리 구간에 붙어 있으면 True(채움말이 아니라 연장으로 본다)."""
     containing = _overlapping_sound_intervals(word, sound_intervals)
     return any(
         any(
@@ -182,9 +156,7 @@ CLIPPING_AMPLITUDE = 0.99       # 이 값 이상이면 클리핑(입력 과다)�
 
 
 def analyze_calibration(calibration_audio_path, whisper_model=None):
-    """캘리브레이션 오디오(무음 + 낭독 + 자유발화)를 분석해서 이 사람/이
-    녹음 환경의 기준값을 뽑아낸다. analyze_filler()의 calibration 인자로
-    그대로 넘기면 된다 (음향 기반 후보 판별의 개인화에 쓰임)."""
+    """목소리 확인 녹음(무음 + 낭독 + 자유발화)에서 이 사람·환경의 기준값을 뽑는다(analyze_filler의 calibration으로 넘김)."""
     model = whisper_model or _get_default_whisper_model()
 
     y, sr = librosa.load(calibration_audio_path, sr=16000, mono=True)
@@ -225,10 +197,7 @@ def analyze_calibration(calibration_audio_path, whisper_model=None):
 # -----------------------------------------------------------------------------
 
 def detect_high_confidence_fillers(words, sound_intervals):
-    """어/음/아/에/애 - 독립 소리구간이면 채움말, 다른 단어와 뭉쳐 있으면 제외.
-    뭉쳐서 제외된 것은 cnn_prolongation_candidates로 따로 기록한다
-    (CNN을 직접 호출하지는 않음 - 나중에 CNN 재학습 결과와 수동 대조하기 위한
-    기록용. "이 시간대를 CNN이 실제로 prolongation으로 잡아냈는지" 검증 목적)."""
+    """어/음/아/에/애를 찾아 (채움말 목록, 다른 단어에 붙어 빠진 연장 후보 목록)을 돌려준다."""
     events = []
     cnn_candidates = []
     for word in words:
@@ -244,8 +213,7 @@ def detect_high_confidence_fillers(words, sound_intervals):
 
 
 def detect_conditional_fillers(words, sound_intervals):
-    """그/저/뭐/막 등 - 실제 단어일 수 있으므로 독립 소리구간일 때만 채움말로 인정.
-    뭉쳐서 제외된 것도 cnn_prolongation_candidates로 기록 (용도는 위와 동일)."""
+    """그/저/뭐/막 등은 실제 단어일 수 있어 홀로 떨어진 소리일 때만 채움말로 센다. 반환 모양은 위와 같다."""
     events = []
     cnn_candidates = []
     for word in words:
@@ -282,8 +250,7 @@ def _subtract_words_from_interval(interval_start, interval_end, words):
 
 
 def detect_acoustic_filler_candidates(y, sr, sound_intervals, words, filler_baseline, breath_baseline):
-    """Whisper가 설명하지 못한 유성 잔여 구간을 채움말 '후보'로 검출한다.
-    점수에는 반영 안 되고 기록만 됨 (파일 상단 설명 참고)."""
+    """Whisper 단어로 설명되지 않는 목소리 구간을 채움말 후보로 찾는다(점수에는 넣지 않고 기록만)."""
     if not words:
         return []
 
@@ -329,14 +296,7 @@ def _get_default_whisper_model():
 
 
 def analyze_filler(audio_path, whisper_model=None, total_duration_sec=None, calibration=None):
-    """채움말 분석 진입점. app.py 호출부와의 시그니처/반환키 호환 유지.
-
-    점수(score/total_count/filler_rate_per_min)는 텍스트로 확실히 확인된
-    채움말(고신뢰+조건부)만 반영한다. 음향 기반 후보는 별도로
-    acoustic_filler_candidates에 기록되고 점수에는 안 들어간다.
-
-    calibration: analyze_calibration()의 반환값을 넘기면, 음향 기반 후보
-    판별(개인 ZCR 기준값)에 사용한다. 없으면 이 녹음 자체에서 추정."""
+    """녹음 하나의 채움말 점수·개수·위치를 돌려준다. calibration이 없으면 개인 기준값을 이 녹음에서 추정한다."""
     model = whisper_model or _get_default_whisper_model()
 
     word_segments = get_word_segments(audio_path, model)
@@ -362,7 +322,7 @@ def analyze_filler(audio_path, whisper_model=None, total_duration_sec=None, cali
         y, sr, sound_intervals, word_segments, filler_baseline, breath_baseline,
     )
 
-    # 점수에 반영되는 건 이 목록뿐 - 음향 기반 후보는 안 섞는다.
+    # 점수에는 글자로 확인된 채움말만 넣는다(음향 후보는 숨소리 오탐이 많아 제외)
     scored_events = sorted(
         conditional_events + high_confidence_events,
         key=lambda event: event["start"],
@@ -377,8 +337,7 @@ def analyze_filler(audio_path, whisper_model=None, total_duration_sec=None, cali
     sound_segment_count = len(sound_intervals)
     filler_ratio = len(scored_events) / sound_segment_count if sound_segment_count else 0.0
 
-    # 잠정 점수식 - 실제 서비스 라벨 데이터로 재보정 필요.
-    # 3단계 구간(0~5/5~12/12+개 분당)으로 나눠 완만하게 감점.
+    # 잠정 점수식: 분당 0~5 / 5~12 / 12개 초과 구간마다 다르게 깎는다(근거: docs/filler_threshold_근거.md)
     if filler_rate_per_min <= 5:
         score = 100 - filler_rate_per_min * 2
     elif filler_rate_per_min <= 12:
