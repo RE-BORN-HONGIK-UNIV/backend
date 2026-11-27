@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from step3.interview_question import (
     FALLBACK_FOLLOW_UPS,
+    INTRO_FOLLOW_UPS,
     FALLBACK_QUESTIONS,
     FOLLOW_UP_INSTRUCTIONS,
     MAX_PAST_QUESTIONS,
@@ -247,3 +248,20 @@ def test_fallback_follow_ups_do_not_repeat_within_an_interview():
         asked.append(_fallback_question("practice", previous_questions=asked, mode="follow_up"))
     assert asked == pool  # 순서대로 겹치지 않게
     assert _fallback_question("practice", previous_questions=asked, mode="follow_up") == pool[0]  # 다 쓰면 처음부터
+
+
+def test_fallback_follow_up_after_intro_fits_any_self_introduction():
+    intro = "간단하게 자기소개 부탁드립니다."
+    q = _fallback_question("standard", previous_questions=[intro], mode="follow_up")
+    assert q == INTRO_FOLLOW_UPS["standard"][0]
+    # 다음 기본 질문이 나온 뒤에는 원래 꼬리질문 목록으로
+    q2 = _fallback_question("standard", previous_questions=[intro, q, "본인의 강점을 하나 꼽는다면 무엇인가요?"], mode="follow_up")
+    assert q2 == FALLBACK_FOLLOW_UPS["standard"][0]
+
+
+def test_fallback_follow_ups_after_practice_intro_do_not_repeat():
+    intro = "본인 소개와 함께, 하고 싶은 일과 본인이 어떤 점에서 잘 맞는지 말씀해 주세요."
+    asked = [intro]
+    for _ in range(2):
+        asked.append(_fallback_question("practice", previous_questions=asked, mode="follow_up"))
+    assert asked[1:] == INTRO_FOLLOW_UPS["practice"]

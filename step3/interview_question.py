@@ -119,6 +119,24 @@ FALLBACK_FOLLOW_UPS = {
     ],
 }
 
+# 자기소개 바로 뒤의 고정 꼬리질문 — 위 목록은 경험 이야기를 전제로 해서("그때 어떤 역할을…") 자기소개 뒤에는 뜬금없다
+INTRO_FOLLOW_UPS = {
+    "warmup": ["방금 이야기 좋았어요. 그 부분을 조금만 더 들려주실 수 있을까요?"],
+    "standard": ["방금 이야기 좋았어요. 그 부분을 조금만 더 들려주실 수 있을까요?"],
+    "practice": [
+        "방금 말씀하신 내용에서, 그렇게 판단한 구체적인 근거를 말씀해 주시겠어요?",
+        "그 경험을 앞으로 일할 때 어떻게 살릴 수 있을까요?",
+    ],
+}
+
+
+def _in_intro_block(tier: str, previous_questions: list[str]) -> bool:
+    """지금까지가 첫 질문(자기소개)과 그 꼬리질문뿐인지 — 첫 질문은 프론트가 고정으로 낸다."""
+    if not previous_questions or not any(k in previous_questions[0] for k in ("자기소개", "본인 소개")):
+        return False
+    intro = INTRO_FOLLOW_UPS.get(tier, INTRO_FOLLOW_UPS["standard"])
+    return all(q in intro for q in previous_questions[1:])
+
 
 # ── 1·2단계 세부 점수 → 질문 방식 조절 ─────────────────────────────────
 # 점수 숫자는 AI에 넘기지 않고, 낮게 나온 항목에 맞는 "질문 방식 지침"만 넘긴다(이유: 설계노트)
@@ -258,7 +276,8 @@ def _fallback_question(
 ) -> str:
     """고정 질문 중 이번 면접에서 안 나온 것을 고른다(기본 질문은 지난 면접에도 안 나온 것을 우선)."""
     if mode == "follow_up":
-        pool = FALLBACK_FOLLOW_UPS.get(tier, FALLBACK_FOLLOW_UPS["standard"])
+        intro = _in_intro_block(tier, previous_questions)
+        pool = (INTRO_FOLLOW_UPS if intro else FALLBACK_FOLLOW_UPS).get(tier, FALLBACK_FOLLOW_UPS["standard"])
         unused = [q for q in pool if q not in previous_questions]
         return (unused or pool)[0]
 
